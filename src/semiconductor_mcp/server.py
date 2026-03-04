@@ -212,8 +212,16 @@ if ENABLE_EVAL:
         - threshold: minimum composite score to accept (default 0.9)
         - max_attempts: maximum search-draft-evaluate cycles (default 3)
 
-        Returns the verified answer, evaluation scores, sources used, and
-        number of attempts taken.
+        IMPORTANT: After presenting the answer to the user, you MUST always
+        display the confidence ratings from the evaluation field, formatted as:
+
+          Confidence scores:
+          • Composite: <composite_score>
+          • Faithfulness: <faithfulness.score>  (are claims supported by sources?)
+          • Answer relevancy: <answer_relevancy.score>  (does answer address the question?)
+          • Context utilization: <context_utilization.score>  (grounded in retrieved sources?)
+
+        Always show these scores — they tell the user how much to trust the answer.
         """
         from .sources import arxiv, semantic_scholar, newsapi
 
