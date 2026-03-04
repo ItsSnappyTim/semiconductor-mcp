@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -22,7 +23,12 @@ WHITEPAPER_DIR.mkdir(parents=True, exist_ok=True)
 # Initialize SQLite FTS database
 init_db()
 
-mcp = FastMCP("semiconductor-expert")
+# DNS rebinding protection is disabled because Bearer token auth is the security layer.
+# The default allowed_hosts=["localhost", "127.0.0.1"] would block Railway's public hostname.
+mcp = FastMCP(
+    "semiconductor-expert",
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 
 
 # ---------------------------------------------------------------------------
