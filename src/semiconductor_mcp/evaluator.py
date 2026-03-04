@@ -120,16 +120,37 @@ async def _faithfulness(
                 "error": None,
             }
 
-        # Step B: batch-verify all claims in one call
+        # Step B: batch-verify all claims; use 256 tokens per claim to avoid truncation
         claims_text = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(claims))
+        batch_max_tokens = min(4096, max(1024, len(claims) * 256))
         raw = await _call_haiku(
             client,
             _CLAIM_VERIFICATION_SYSTEM,
             f"Contexts:\n{_fmt_contexts(contexts)}\n\nClaims to verify:\n{claims_text}",
-            max_tokens=1024,
+            max_tokens=batch_max_tokens,
         )
-        parsed = _extract_json(raw)
-        verdicts: list[dict] = parsed.get("verdicts", [])
+        try:
+            parsed = _extract_json(raw)
+            verdicts: list[dict] = parsed.get("verdicts", [])
+        except ValueError:
+            # Batch response truncated — fall back to verifying each claim individually
+            verdicts = []
+            _SINGLE_SYSTEM = _CLAIM_VERIFICATION_SYSTEM.replace(
+                "Output ONLY a JSON object in this exact format (no other text):\n"
+                '{"verdicts": [{"claim": "...", "supported": true, "reason": "one sentence"}, ...]}',
+                'Output ONLY a JSON object: {"claim": "...", "supported": true, "reason": "one sentence"}',
+            )
+            for claim in claims:
+                try:
+                    r = await _call_haiku(
+                        client, _SINGLE_SYSTEM,
+                        f"Contexts:\n{_fmt_contexts(contexts)}\n\nClaim: {claim}",
+                        max_tokens=128,
+                    )
+                    v = _extract_json(r)
+                    verdicts.append({"claim": claim, "supported": v.get("supported", False), "reason": v.get("reason", "")})
+                except Exception:
+                    verdicts.append({"claim": claim, "supported": False, "reason": "parse error"})
 
         supported = sum(1 for v in verdicts if v.get("supported", False))
         total = len(verdicts) or len(claims)
