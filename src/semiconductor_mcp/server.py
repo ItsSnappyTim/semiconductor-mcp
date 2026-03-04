@@ -155,7 +155,7 @@ async def list_whitepapers() -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    app = mcp.sse_app()
+    app = mcp.streamable_http_app()
     app.add_middleware(BearerAuthMiddleware)
 
     import uvicorn
