@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 from pathlib import Path
 from typing import Any
@@ -37,9 +38,10 @@ mcp = FastMCP(
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Any) -> Response:
-        if MCP_AUTH_TOKEN and request.url.path != "/health":
+        if request.url.path != "/health":
             auth = request.headers.get("Authorization", "")
-            if auth != f"Bearer {MCP_AUTH_TOKEN}":
+            expected = f"Bearer {MCP_AUTH_TOKEN}"
+            if not hmac.compare_digest(auth, expected):
                 return Response("Unauthorized", status_code=401)
         return await call_next(request)
 
@@ -64,10 +66,14 @@ async def search_academic(query: str, max_results: int = 5) -> str:
     Returns deduplicated results ranked by source. Use for fact-checking
     technical claims about semiconductor processes, materials, and equipment.
     """
-    arxiv_results, ss_results = await asyncio.gather(
-        arxiv.search(query, max_results),
-        semantic_scholar.search(query, max_results),
-    )
+    max_results = max(1, min(max_results, 20))
+    try:
+        arxiv_results, ss_results = await asyncio.gather(
+            arxiv.search(query, max_results),
+            semantic_scholar.search(query, max_results),
+        )
+    except Exception as exc:
+        return json.dumps({"error": f"Search failed: {exc}"})
 
     # Deduplicate by DOI (prefer Semantic Scholar entry which has citation count)
     seen_dois: set[str] = set()
@@ -91,7 +97,11 @@ async def search_news(query: str, max_results: int = 5) -> str:
     Use for tracking current events: fab announcements, equipment orders,
     technology roadmap updates, company earnings, and supply chain news.
     """
-    results = await newsapi.search(query, max_results)
+    max_results = max(1, min(max_results, 20))
+    try:
+        results = await newsapi.search(query, max_results)
+    except Exception as exc:
+        return json.dumps({"error": f"News search failed: {exc}"})
     return json.dumps(results, ensure_ascii=False, indent=2)
 
 
@@ -103,16 +113,31 @@ async def add_whitepaper(file_path: str) -> str:
     volume at /data/whitepapers/). Provide the absolute server-side path.
     Re-indexing an existing filename updates the record.
     """
-    path = Path(file_path)
+    # H-3: Confine to whitepapers directory to prevent path traversal
+    try:
+        path = Path(file_path).resolve()
+        allowed = WHITEPAPER_DIR.resolve()
+        path.relative_to(allowed)  # raises ValueError if outside allowed dir
+    except ValueError:
+        return json.dumps({"error": "File must be inside the whitepapers directory"})
+
     if not path.exists():
-        return json.dumps({"error": f"File not found: {file_path}"})
+        return json.dumps({"error": "File not found"})
     if path.suffix.lower() != ".pdf":
         return json.dumps({"error": "Only PDF files are supported"})
+
+    # M-5: Reject oversized PDFs (50 MB limit)
+    if path.stat().st_size > 50 * 1024 * 1024:
+        return json.dumps({"error": "File exceeds 50 MB size limit"})
 
     try:
         title, page_count, full_text = extract_pdf(path)
     except Exception as exc:
         return json.dumps({"error": f"Failed to extract PDF: {exc}"})
+
+    # M-5: Truncate excessively long extracted text (2 M chars)
+    if len(full_text) > 2_000_000:
+        full_text = full_text[:2_000_000]
 
     row_id = insert_whitepaper(
         filename=path.name,
@@ -139,6 +164,7 @@ async def search_whitepapers(query: str, max_results: int = 5) -> str:
     Returns matching documents with highlighted excerpt snippets showing
     where the query terms appear in the text.
     """
+    max_results = max(1, min(max_results, 20))
     try:
         results = search_fts(query, max_results)
     except Exception as exc:
@@ -227,6 +253,9 @@ if ENABLE_EVAL:
         from and how much to trust it.
         """
         from .sources import arxiv, semantic_scholar, newsapi
+
+        threshold = max(0.0, min(threshold, 1.0))
+        max_attempts = max(1, min(max_attempts, 5))
 
         best: dict[str, Any] = {}
         best_score: float = -1.0

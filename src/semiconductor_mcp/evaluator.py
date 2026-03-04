@@ -104,7 +104,7 @@ async def _faithfulness(
         raw = await _call_haiku(
             client,
             _CLAIM_EXTRACTION_SYSTEM,
-            f"Answer: {answer}",
+            f"<answer>{answer}</answer>",
             max_tokens=512,
         )
         parsed = _extract_json(raw)
@@ -126,7 +126,7 @@ async def _faithfulness(
         raw = await _call_haiku(
             client,
             _CLAIM_VERIFICATION_SYSTEM,
-            f"Contexts:\n{_fmt_contexts(contexts)}\n\nClaims to verify:\n{claims_text}",
+            f"<contexts>\n{_fmt_contexts(contexts)}\n</contexts>\n\n<claims>\n{claims_text}\n</claims>",
             max_tokens=batch_max_tokens,
         )
         try:
@@ -144,7 +144,7 @@ async def _faithfulness(
                 try:
                     r = await _call_haiku(
                         client, _SINGLE_SYSTEM,
-                        f"Contexts:\n{_fmt_contexts(contexts)}\n\nClaim: {claim}",
+                        f"<contexts>\n{_fmt_contexts(contexts)}\n</contexts>\n\n<claim>{claim}</claim>",
                         max_tokens=128,
                     )
                     v = _extract_json(r)
@@ -165,7 +165,7 @@ async def _faithfulness(
         }
 
     except httpx.HTTPStatusError as exc:
-        return {"score": None, "error": f"Anthropic API {exc.response.status_code}: {exc.response.text[:200]}"}
+        return {"score": None, "error": f"Anthropic API error (HTTP {exc.response.status_code})"}
     except httpx.TimeoutException:
         return {"score": None, "error": "Anthropic API timeout"}
     except (ValueError, KeyError, TypeError) as exc:
@@ -198,14 +198,14 @@ async def _answer_relevancy(
         raw = await _call_haiku(
             client,
             _RELEVANCY_SYSTEM,
-            f"Question: {question}\n\nAnswer: {answer}",
+            f"<question>{question}</question>\n\n<answer>{answer}</answer>",
         )
         parsed = _extract_json(raw)
         score = max(0.0, min(1.0, float(parsed["score"])))
         return {"score": round(score, 3), "reasoning": parsed.get("reasoning", ""), "error": None}
 
     except httpx.HTTPStatusError as exc:
-        return {"score": None, "error": f"Anthropic API {exc.response.status_code}: {exc.response.text[:200]}"}
+        return {"score": None, "error": f"Anthropic API error (HTTP {exc.response.status_code})"}
     except httpx.TimeoutException:
         return {"score": None, "error": "Anthropic API timeout"}
     except (ValueError, KeyError, TypeError) as exc:
@@ -239,14 +239,14 @@ async def _context_utilization(
         raw = await _call_haiku(
             client,
             _CTX_UTIL_SYSTEM,
-            f"Contexts:\n{_fmt_contexts(contexts)}\n\nAnswer: {answer}",
+            f"<contexts>\n{_fmt_contexts(contexts)}\n</contexts>\n\n<answer>{answer}</answer>",
         )
         parsed = _extract_json(raw)
         score = max(0.0, min(1.0, float(parsed["score"])))
         return {"score": round(score, 3), "reasoning": parsed.get("reasoning", ""), "error": None}
 
     except httpx.HTTPStatusError as exc:
-        return {"score": None, "error": f"Anthropic API {exc.response.status_code}: {exc.response.text[:200]}"}
+        return {"score": None, "error": f"Anthropic API error (HTTP {exc.response.status_code})"}
     except httpx.TimeoutException:
         return {"score": None, "error": "Anthropic API timeout"}
     except (ValueError, KeyError, TypeError) as exc:
@@ -277,7 +277,7 @@ async def draft_answer(client: httpx.AsyncClient, question: str, contexts: list[
     raw = await _call_haiku(
         client,
         _DRAFT_SYSTEM,
-        f"Question: {question}\n\nContexts:\n{_fmt_contexts(contexts)}\n\nAnswer:",
+        f"<question>{question}</question>\n\n<contexts>\n{_fmt_contexts(contexts)}\n</contexts>\n\nAnswer:",
         max_tokens=1024,
     )
     return raw.strip()
@@ -290,7 +290,7 @@ async def refine_query(
     raw = await _call_haiku(
         client,
         _REFINE_QUERY_SYSTEM,
-        f"Original question: {question}\nPrevious query: {prev_query}\nIssue with results: {issue}\n\nImproved query:",
+        f"<question>{question}</question>\n<prev_query>{prev_query}</prev_query>\n<issue>{issue}</issue>\n\nImproved query:",
         max_tokens=64,
     )
     words = raw.strip().strip("\"'").split()
@@ -309,7 +309,7 @@ async def question_to_query(client: httpx.AsyncClient, question: str) -> str:
     raw = await _call_haiku(
         client,
         _KEYWORDS_SYSTEM,
-        f"Question: {question}\n\nSearch query (3-5 key terms only):",
+        f"<question>{question}</question>\n\nSearch query (3-5 key terms only):",
         max_tokens=32,
     )
     # Hard cap at 5 words to keep arXiv AND query tractable

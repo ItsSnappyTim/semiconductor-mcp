@@ -13,10 +13,9 @@ async def search(query: str, max_results: int = 5) -> list[dict[str, Any]]:
         "sortBy": "relevancy",
         "language": "en",
         "pageSize": max_results,
-        "apiKey": NEWSAPI_KEY,
     }
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(_BASE, params=params)
+        resp = await client.get(_BASE, params=params, headers={"X-Api-Key": NEWSAPI_KEY})
         resp.raise_for_status()
 
     data = resp.json()

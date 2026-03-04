@@ -23,5 +23,7 @@ ENABLE_EVAL = os.environ.get("ENABLE_EVAL", "").strip().lower() in {"1", "true",
 def validate_config() -> None:
     if not NEWSAPI_KEY:
         raise ValueError("NEWSAPI_KEY environment variable is required")
+    if not MCP_AUTH_TOKEN:
+        raise ValueError("MCP_AUTH_TOKEN environment variable is required")
     if ENABLE_EVAL and not ANTHROPIC_API_KEY:
         raise ValueError("ANTHROPIC_API_KEY is required when ENABLE_EVAL is set")
