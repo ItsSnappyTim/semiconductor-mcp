@@ -1,0 +1,23 @@
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+_whitepaper_dir = os.environ.get("WHITEPAPER_DIR", "")
+WHITEPAPER_DIR = Path(_whitepaper_dir) if _whitepaper_dir else PROJECT_ROOT / "data" / "whitepapers"
+
+_db_path = os.environ.get("DB_PATH", "")
+DB_PATH = Path(_db_path) if _db_path else PROJECT_ROOT / "data" / "whitepapers.db"
+
+PORT = int(os.environ.get("PORT", 8000))
+
+NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "")
+MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
+
+
+def validate_config() -> None:
+    if not NEWSAPI_KEY:
+        raise ValueError("NEWSAPI_KEY environment variable is required")
