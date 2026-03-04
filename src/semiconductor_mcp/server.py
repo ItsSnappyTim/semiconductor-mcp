@@ -161,7 +161,14 @@ async def list_whitepapers() -> str:
 # ---------------------------------------------------------------------------
 
 if ENABLE_EVAL:
-    from .evaluator import evaluate_response as _evaluate_response
+    from .evaluator import (
+        draft_answer as _draft_answer,
+        evaluate_response as _evaluate_response,
+        question_to_query as _question_to_query,
+        refine_query as _refine_query,
+        _eval_with_client,
+    )
+    import httpx as _httpx
 
     @mcp.tool()
     async def evaluate_response(question: str, contexts: list[str], answer: str) -> str:
@@ -182,6 +189,113 @@ if ENABLE_EVAL:
         Plus a composite_score (mean of the three) and per-claim verdict details.
         """
         return await _evaluate_response(question, contexts, answer)
+
+    @mcp.tool()
+    async def research_and_verify(
+        question: str,
+        threshold: float = 0.9,
+        max_attempts: int = 3,
+    ) -> str:
+        """Research a semiconductor question and return a verified, high-quality answer.
+
+        Unlike search_academic or search_news, this tool runs a full loop:
+          1. Search arXiv, Semantic Scholar, and NewsAPI concurrently
+          2. Draft a context-grounded answer using retrieved sources
+          3. Evaluate faithfulness, answer relevancy, and context utilization
+          4. If composite score < threshold, refine the query and retry
+          5. Return only when score >= threshold or attempts are exhausted
+
+        Use this when you need a guaranteed high-confidence answer, not just
+        raw search results.
+
+        - question: the semiconductor question to research
+        - threshold: minimum composite score to accept (default 0.9)
+        - max_attempts: maximum search-draft-evaluate cycles (default 3)
+
+        Returns the verified answer, evaluation scores, sources used, and
+        number of attempts taken.
+        """
+        from .sources import arxiv, semantic_scholar, newsapi
+
+        best: dict[str, Any] = {}
+        best_score: float = -1.0
+
+        async with _httpx.AsyncClient(timeout=45) as client:
+            # Convert natural language question to search-friendly keywords
+            query = await _question_to_query(client, question)
+
+            for attempt in range(1, max_attempts + 1):
+
+                # 1. Search all sources concurrently
+                arxiv_results, ss_results, news_results = await asyncio.gather(
+                    arxiv.search(query, max_results=5),
+                    semantic_scholar.search(query, max_results=5),
+                    newsapi.search(query, max_results=5),
+                )
+
+                # 2. Deduplicate academic results by DOI, build context list
+                seen_dois: set[str] = set()
+                academic: list[dict[str, Any]] = []
+                for r in ss_results + arxiv_results:
+                    doi = r.get("doi")
+                    if doi:
+                        if doi in seen_dois:
+                            continue
+                        seen_dois.add(doi)
+                    academic.append(r)
+
+                contexts = []
+                sources = []
+                for r in academic[:6]:
+                    if r.get("abstract"):
+                        contexts.append(f"{r['title']}: {r['abstract']}")
+                        sources.append({"type": "academic", "title": r["title"], "url": r.get("url", ""), "year": r.get("year", "")})
+                for r in news_results[:4]:
+                    if r.get("description"):
+                        contexts.append(f"{r['title']}: {r['description']}")
+                        sources.append({"type": "news", "title": r["title"], "url": r.get("url", ""), "published_at": r.get("published_at", "")})
+
+                if not contexts:
+                    if not best:
+                        best = {"error": f"No results found for query: {query!r}"}
+                    break
+
+                # 3. Draft answer grounded in retrieved contexts
+                answer = await _draft_answer(client, question, contexts)
+
+                # 4. Evaluate
+                eval_result = await _eval_with_client(client, question, contexts, answer)
+                composite = eval_result.get("composite_score") or 0.0
+
+                if composite > best_score:
+                    best_score = composite
+                    best = {
+                        "answer": answer,
+                        "sources": sources,
+                        "evaluation": eval_result,
+                        "query_used": query,
+                        "attempt": attempt,
+                        "threshold_met": composite >= threshold,
+                    }
+
+                if composite >= threshold:
+                    break
+
+                # 5. Refine query for next attempt
+                if attempt < max_attempts:
+                    low_metric = min(
+                        ("faithfulness", eval_result["metrics"]["faithfulness"].get("score") or 0),
+                        ("answer_relevancy", eval_result["metrics"]["answer_relevancy"].get("score") or 0),
+                        ("context_utilization", eval_result["metrics"]["context_utilization"].get("score") or 0),
+                        key=lambda x: x[1],
+                    )
+                    issue = f"{low_metric[0]} score was {low_metric[1]:.2f} — need more specific/relevant sources"
+                    query = await _refine_query(client, question, query, issue)
+
+        if not best:
+            best = {"error": "All attempts failed to retrieve results"}
+
+        return json.dumps(best, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------------------

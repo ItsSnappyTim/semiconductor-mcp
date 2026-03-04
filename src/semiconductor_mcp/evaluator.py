@@ -254,6 +254,92 @@ async def _context_utilization(
 
 
 # ---------------------------------------------------------------------------
+# Draft answer + query refinement (used by research_and_verify)
+# ---------------------------------------------------------------------------
+
+_DRAFT_SYSTEM = """\
+You are a semiconductor industry expert. Answer the question based STRICTLY on
+the provided context passages — do not use outside knowledge. If the contexts
+don't support a claim, do not make it. Be specific, cite concrete details from
+the contexts, and keep the answer focused and factual.
+"""
+
+_REFINE_QUERY_SYSTEM = """\
+You are a search query optimizer for semiconductor industry research.
+Given an original question and the reason the previous search didn't score well,
+generate a single improved search query likely to find more relevant academic
+papers or news articles. Output ONLY the improved query string, nothing else.
+"""
+
+
+async def draft_answer(client: httpx.AsyncClient, question: str, contexts: list[str]) -> str:
+    """Generate a context-grounded answer using Haiku."""
+    raw = await _call_haiku(
+        client,
+        _DRAFT_SYSTEM,
+        f"Question: {question}\n\nContexts:\n{_fmt_contexts(contexts)}\n\nAnswer:",
+        max_tokens=1024,
+    )
+    return raw.strip()
+
+
+async def refine_query(
+    client: httpx.AsyncClient, question: str, prev_query: str, issue: str
+) -> str:
+    """Generate an improved search query based on what the previous one missed."""
+    raw = await _call_haiku(
+        client,
+        _REFINE_QUERY_SYSTEM,
+        f"Original question: {question}\nPrevious query: {prev_query}\nIssue with results: {issue}\n\nImproved query:",
+        max_tokens=64,
+    )
+    words = raw.strip().strip("\"'").split()
+    return " ".join(words[:5])
+
+
+_KEYWORDS_SYSTEM = """\
+Convert a natural language question into a concise academic search query (3-6 key terms).
+Strip question words (does, is, are, what, how, why), keep technical nouns and verbs.
+Output ONLY the search query string, nothing else.
+"""
+
+
+async def question_to_query(client: httpx.AsyncClient, question: str) -> str:
+    """Convert a natural language question into search-friendly keywords (max 5 words)."""
+    raw = await _call_haiku(
+        client,
+        _KEYWORDS_SYSTEM,
+        f"Question: {question}\n\nSearch query (3-5 key terms only):",
+        max_tokens=32,
+    )
+    # Hard cap at 5 words to keep arXiv AND query tractable
+    words = raw.strip().strip("\"'").split()
+    return " ".join(words[:5])
+
+
+async def _eval_with_client(
+    client: httpx.AsyncClient, question: str, contexts: list[str], answer: str
+) -> dict[str, Any]:
+    """Run all three metrics and return the raw dict (no JSON serialisation)."""
+    faith, relevancy, ctx_util = await asyncio.gather(
+        _faithfulness(client, question, contexts, answer),
+        _answer_relevancy(client, question, contexts, answer),
+        _context_utilization(client, question, contexts, answer),
+    )
+    scores = [m["score"] for m in (faith, relevancy, ctx_util) if m.get("score") is not None]
+    composite = round(sum(scores) / len(scores), 3) if scores else None
+    return {
+        "metrics": {
+            "faithfulness": faith,
+            "answer_relevancy": relevancy,
+            "context_utilization": ctx_util,
+        },
+        "composite_score": composite,
+        "eval_model": _MODEL,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
