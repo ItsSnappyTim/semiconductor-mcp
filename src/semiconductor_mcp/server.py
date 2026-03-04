@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from .config import MCP_AUTH_TOKEN, PORT, WHITEPAPER_DIR, validate_config
+from .config import ENABLE_EVAL, MCP_AUTH_TOKEN, PORT, WHITEPAPER_DIR, validate_config
 from .db import init_db, insert_whitepaper, list_all, search_fts
 from .pdf_utils import extract_pdf
 from .sources import arxiv, newsapi, semantic_scholar
@@ -154,6 +154,34 @@ async def list_whitepapers() -> str:
     """
     results = list_all()
     return json.dumps(results, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Optional: RAGAS-inspired evaluation tool
+# ---------------------------------------------------------------------------
+
+if ENABLE_EVAL:
+    from .evaluator import evaluate_response as _evaluate_response
+
+    @mcp.tool()
+    async def evaluate_response(question: str, contexts: list[str], answer: str) -> str:
+        """Evaluate a generated answer using RAGAS-inspired metrics.
+
+        Use this after generating an answer with search_academic or search_news
+        to score the quality of the response.
+
+        - question: the original user question
+        - contexts: list of retrieved text passages used to generate the answer
+          (e.g. paper abstracts, news descriptions from previous tool calls)
+        - answer: the answer text to evaluate
+
+        Returns JSON with three scores (0.0–1.0):
+          faithfulness        — are the answer's claims supported by the contexts?
+          answer_relevancy    — does the answer actually address the question?
+          context_utilization — did the answer draw from contexts vs general knowledge?
+        Plus a composite_score (mean of the three) and per-claim verdict details.
+        """
+        return await _evaluate_response(question, contexts, answer)
 
 
 # ---------------------------------------------------------------------------

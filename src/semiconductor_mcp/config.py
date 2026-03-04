@@ -16,8 +16,12 @@ PORT = int(os.environ.get("PORT", 8000))
 
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "")
 MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ENABLE_EVAL = os.environ.get("ENABLE_EVAL", "").strip().lower() in {"1", "true", "yes"}
 
 
 def validate_config() -> None:
     if not NEWSAPI_KEY:
         raise ValueError("NEWSAPI_KEY environment variable is required")
+    if ENABLE_EVAL and not ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY is required when ENABLE_EVAL is set")
