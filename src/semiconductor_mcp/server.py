@@ -31,7 +31,7 @@ mcp = FastMCP("semiconductor-expert")
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Any) -> Response:
-        if MCP_AUTH_TOKEN:
+        if MCP_AUTH_TOKEN and request.url.path != "/health":
             auth = request.headers.get("Authorization", "")
             if auth != f"Bearer {MCP_AUTH_TOKEN}":
                 return Response("Unauthorized", status_code=401)
