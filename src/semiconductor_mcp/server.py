@@ -212,16 +212,19 @@ if ENABLE_EVAL:
         - threshold: minimum composite score to accept (default 0.9)
         - max_attempts: maximum search-draft-evaluate cycles (default 3)
 
-        IMPORTANT: After presenting the answer to the user, you MUST always
-        display the confidence ratings from the evaluation field, formatted as:
+        IMPORTANT: After presenting the answer to the user, you MUST always display:
 
-          Confidence scores:
-          • Composite: <composite_score>
-          • Faithfulness: <faithfulness.score>  (are claims supported by sources?)
-          • Answer relevancy: <answer_relevancy.score>  (does answer address the question?)
-          • Context utilization: <context_utilization.score>  (grounded in retrieved sources?)
+        1. Sources consulted — list each source from the sources array as:
+             • [title] (year if academic, date if news) — url
 
-        Always show these scores — they tell the user how much to trust the answer.
+        2. Confidence scores from the evaluation field:
+             • Composite: <composite_score>
+             • Faithfulness: <faithfulness.score>  (claims supported by sources?)
+             • Answer relevancy: <answer_relevancy.score>  (answers the question?)
+             • Context utilization: <context_utilization.score>  (grounded in sources?)
+
+        Always show both sections — they tell the user where the information came
+        from and how much to trust it.
         """
         from .sources import arxiv, semantic_scholar, newsapi
 
