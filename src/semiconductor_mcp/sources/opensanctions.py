@@ -40,8 +40,6 @@ async def screen_entity(name: str, api_key: str = "") -> dict[str, Any]:
 
     params = {
         "q": name,
-        "schema": "LegalEntity",
-        "datasets": "default",
         "limit": 10,
     }
     headers = {"Authorization": f"ApiKey {api_key}"}
