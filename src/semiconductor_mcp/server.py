@@ -698,7 +698,8 @@ if ENABLE_EVAL:
 
                 # Gather dynamic sources concurrently
                 gdelt_sc_coro = _gdelt.search_supply_chain_news(query, days=90)
-                gdelt_gm_coro = _gdelt.search_grey_market_signals(query, days=180)
+                # Stagger grey market call by 1s to avoid GDELT rate limit (429)
+                gdelt_gm_coro = _gdelt.search_grey_market_signals(query, days=180, delay=1.0)
                 news_coro = newsapi.search(
                     f"{query} semiconductor supply chain", max_results=5
                 )
