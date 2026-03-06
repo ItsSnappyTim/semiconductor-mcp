@@ -1,0 +1,64 @@
+"""GDELT DOC 2.0 API client — free, no API key required.
+
+GDELT monitors global news in near real-time. We use it for two purposes:
+  1. General supply chain news signals for a component
+  2. Grey market / enforcement signals (smuggling, sanctions evasion, counterfeit)
+"""
+
+from typing import Any
+
+import httpx
+
+_BASE = "http://api.gdeltproject.org/api/v2/doc/doc"
+_TIMEOUT = 20
+
+
+async def _search(query: str, days: int, max_records: int = 10) -> list[dict[str, Any]]:
+    params = {
+        "query": query,
+        "mode": "ArtList",
+        "maxrecords": min(max_records, 25),
+        "format": "json",
+        "timespan": f"{max(1, min(days, 365))}d",
+        "sort": "DateDesc",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(_BASE, params=params)
+            resp.raise_for_status()
+        data = resp.json()
+    except httpx.TimeoutException:
+        return [{"error": "GDELT API timeout"}]
+    except httpx.HTTPStatusError as exc:
+        return [{"error": f"GDELT HTTP {exc.response.status_code}"}]
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+    articles = data.get("articles", []) if data else []
+    return [
+        {
+            "title": a.get("title", ""),
+            "url": a.get("url", ""),
+            "domain": a.get("domain", ""),
+            "date": a.get("seendate", ""),
+            "language": a.get("language", ""),
+        }
+        for a in articles
+    ]
+
+
+async def search_supply_chain_news(query: str, days: int = 90) -> list[dict[str, Any]]:
+    """Search GDELT for recent supply chain news related to a query."""
+    full_query = f'"{query}" semiconductor supply chain'
+    return await _search(full_query, days)
+
+
+async def search_grey_market_signals(query: str, days: int = 180) -> list[dict[str, Any]]:
+    """Search GDELT for grey market, smuggling, and enforcement signals."""
+    grey_terms = (
+        "(smuggling OR \"sanctions evasion\" OR counterfeit OR "
+        "\"grey market\" OR diversion OR \"export control violation\" OR "
+        "\"black market\" OR trafficking)"
+    )
+    full_query = f'"{query}" semiconductor {grey_terms}'
+    return await _search(full_query, days, max_records=15)

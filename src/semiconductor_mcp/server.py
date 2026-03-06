@@ -10,10 +10,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from .config import ENABLE_EVAL, MCP_AUTH_TOKEN, PORT, WHITEPAPER_DIR, validate_config
+from .config import (
+    COMTRADE_API_KEY, ENABLE_EVAL, ITA_API_KEY,
+    MCP_AUTH_TOKEN, PORT, WHITEPAPER_DIR, validate_config,
+)
 from .db import init_db, insert_whitepaper, list_all, search_fts
+from .knowledge_base import search as _kb_search
 from .pdf_utils import extract_pdf
 from .sources import arxiv, newsapi, semantic_scholar
+from .sources import bis_screening as _bis_screening
+from .sources import comtrade as _comtrade
+from .sources import edgar as _edgar
+from .sources import gdelt as _gdelt
+from .sources import opensanctions as _opensanctions
 
 # Validate required config at startup
 validate_config()
@@ -179,6 +188,240 @@ async def list_whitepapers() -> str:
     Returns filename, title, date added, and page count for each document.
     """
     results = list_all()
+    return json.dumps(results, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Supply chain intelligence tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def lookup_fab_component(query: str) -> str:
+    """Search the semiconductor fab process knowledge base.
+
+    Accepts component names, material names, process step names, chemical
+    symbols, or equipment names (e.g. "EUV", "gallium", "CMP", "HF",
+    "lithography", "cobalt", "ALD", "neon").
+
+    Returns:
+      - Matching components with: availability classification, key global
+        suppliers with market share, export control status and ECCN,
+        grey market risk level and detail, process steps where used,
+        geographic supply concentration, and critical mineral flag.
+      - Matching process steps with their required component list.
+
+    Availability classes: commodity | specialized | dual_source |
+    single_source | export_controlled
+    Grey market risk: low | medium | high | critical
+    """
+    results = _kb_search(query)
+
+    # Enrich top high-risk components with live OpenSanctions supplier check
+    enriched_components = []
+    for comp in results.get("components", []):
+        enriched = dict(comp)
+        if comp.get("grey_market_risk") in ("high", "critical"):
+            suppliers = comp.get("key_suppliers", [])
+            if suppliers:
+                top_supplier = suppliers[0].get("name", "")
+                if top_supplier:
+                    try:
+                        screen = await _opensanctions.screen_entity(top_supplier)
+                        enriched["supplier_sanctions_check"] = {
+                            "screened_entity": top_supplier,
+                            "risk": screen.get("risk"),
+                            "matches": len(screen.get("matches", [])),
+                        }
+                    except Exception:
+                        pass
+        enriched_components.append(enriched)
+
+    results["components"] = enriched_components
+    return json.dumps(results, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def get_supply_chain_status(component: str) -> str:
+    """Get live supply chain status for a semiconductor component or material.
+
+    Combines:
+    - Knowledge base risk data (availability, suppliers, geographic concentration)
+    - UN Comtrade annual trade flow data (if COMTRADE_API_KEY is configured)
+    - GDELT news signals from the past 90 days (always available)
+
+    Use to assess current availability, geographic concentration, and
+    recent disruption events for a specific component.
+    """
+    kb = _kb_search(component)
+    top_comp = kb["components"][0] if kb["components"] else None
+
+    # Determine HS codes to query
+    hs_codes = top_comp.get("hs_codes", []) if top_comp else []
+
+    async def _no_trade() -> dict:
+        return {"note": "No HS code available for this component"}
+
+    # Run trade flow + GDELT concurrently
+    trade_coro = (
+        _comtrade.get_trade_flow(hs_codes[0], COMTRADE_API_KEY)
+        if hs_codes
+        else _no_trade()
+    )
+    gdelt_coro = _gdelt.search_supply_chain_news(component, days=90)
+
+    trade_data, news_signals = await asyncio.gather(
+        trade_coro, gdelt_coro, return_exceptions=True
+    )
+
+    if isinstance(trade_data, Exception):
+        trade_data = {"error": str(trade_data)}
+    if isinstance(news_signals, Exception):
+        news_signals = []
+
+    result = {
+        "component": component,
+        "knowledge_base": {
+            "name": top_comp.get("name") if top_comp else None,
+            "availability": top_comp.get("availability") if top_comp else None,
+            "geographic_concentration": top_comp.get("geographic_concentration") if top_comp else None,
+            "supply_risks": top_comp.get("supply_risks", []) if top_comp else [],
+            "key_suppliers": top_comp.get("key_suppliers", []) if top_comp else [],
+            "critical_mineral": top_comp.get("critical_mineral") if top_comp else None,
+        },
+        "trade_flow": trade_data,
+        "news_signals": news_signals[:10],
+        "news_signal_count": len(news_signals) if isinstance(news_signals, list) else 0,
+    }
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def screen_entity(entity_name: str, country: str = "") -> str:
+    """Screen a company or individual against global sanctions and export control lists.
+
+    Checks two sources concurrently:
+    1. OpenSanctions (always available, free): 100+ lists including OFAC SDN,
+       EU Consolidated, UN Security Council, UK Sanctions, and national lists.
+    2. ITA Consolidated Screening List (requires ITA_API_KEY): BIS Entity List,
+       BIS Denied Persons List, BIS Unverified List, OFAC SDN/non-SDN, and
+       State Department AECA Debarred list.
+
+    Risk levels:
+      CLEAR   — no matches on any list
+      FLAGGED — matched on a watch/unverified list; proceed with caution
+      BLOCKED — matched on a prohibited list (Entity List, SDN, etc.)
+      UNKNOWN — API error; manual check recommended
+
+    Use before engaging any unfamiliar supplier, especially for controlled
+    semiconductor equipment, materials, or technology.
+    """
+    opensanctions_future = _opensanctions.screen_entity(entity_name)
+    bis_future = _bis_screening.screen_entity(entity_name, ITA_API_KEY)
+
+    os_result, bis_result = await asyncio.gather(
+        opensanctions_future, bis_future, return_exceptions=True
+    )
+
+    if isinstance(os_result, Exception):
+        os_result = {"risk": "UNKNOWN", "error": str(os_result), "total": 0}
+    if isinstance(bis_result, Exception):
+        bis_result = {"risk": "UNKNOWN", "error": str(bis_result), "total": 0}
+
+    # Aggregate risk: take the worst
+    risk_order = {"BLOCKED": 3, "FLAGGED": 2, "CLEAR": 1, "UNKNOWN": 0}
+    os_risk = os_result.get("risk", "UNKNOWN")
+    bis_risk = bis_result.get("risk", "UNKNOWN")
+    aggregate_risk = max(os_risk, bis_risk, key=lambda r: risk_order.get(r, 0))
+
+    result = {
+        "entity": entity_name,
+        "country": country or None,
+        "aggregate_risk": aggregate_risk,
+        "opensanctions": os_result,
+        "ita_consolidated": bis_result,
+        "recommendation": {
+            "BLOCKED": "Do NOT proceed. Entity is on a prohibited list.",
+            "FLAGGED": "Proceed with extreme caution. Conduct enhanced due diligence and obtain legal counsel before transacting.",
+            "CLEAR": "No matches found. Standard due diligence still recommended.",
+            "UNKNOWN": "API check failed. Perform manual checks at opensanctions.org and trade.gov before proceeding.",
+        }.get(aggregate_risk, "Unable to determine risk."),
+    }
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def get_grey_market_signals(query: str) -> str:
+    """Search for grey market, smuggling, and sanctions evasion signals.
+
+    Searches GDELT for recent news (past 180 days) about:
+    smuggling, grey market, sanctions evasion, export control violations,
+    counterfeit goods, and diversion activity related to the query term.
+
+    Also runs a targeted NewsAPI search for enforcement and compliance angles.
+
+    Use to assess whether a component or company is associated with known
+    grey market activity, criminal networks, or sanctions circumvention.
+    """
+    grey_future = _gdelt.search_grey_market_signals(query, days=180)
+    news_future = newsapi.search(
+        f"{query} semiconductor export control enforcement sanctions", max_results=5
+    )
+
+    gdelt_results, news_results = await asyncio.gather(
+        grey_future, news_future, return_exceptions=True
+    )
+
+    if isinstance(gdelt_results, Exception):
+        gdelt_results = [{"error": str(gdelt_results)}]
+    if isinstance(news_results, Exception):
+        news_results = []
+
+    # Assess signal strength
+    signal_count = len(gdelt_results) if isinstance(gdelt_results, list) else 0
+    signal_strength = (
+        "HIGH" if signal_count >= 8
+        else "MEDIUM" if signal_count >= 3
+        else "LOW" if signal_count >= 1
+        else "NONE"
+    )
+
+    result = {
+        "query": query,
+        "signal_strength": signal_strength,
+        "gdelt_articles": gdelt_results,
+        "news_articles": news_results,
+        "interpretation": {
+            "HIGH": "Significant recent news activity around grey market/enforcement for this topic.",
+            "MEDIUM": "Some recent signals; warrants monitoring and due diligence.",
+            "LOW": "Limited signals; may reflect recent events or emerging concern.",
+            "NONE": "No recent grey market signals found in news sources.",
+        }.get(signal_strength, ""),
+    }
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def search_company_filings(company: str, topic: str = "supply chain") -> str:
+    """Search SEC EDGAR 10-K and 10-Q filings for supply chain risk disclosures.
+
+    Major semiconductor equipment and materials companies (ASML, Applied Materials,
+    Lam Research, KLA, Tokyo Electron, Shin-Etsu, Air Products, Entegris, etc.)
+    are legally required to disclose single-source dependencies, geographic
+    concentration risks, export control impacts, and supply chain disruptions
+    in their SEC filings.
+
+    Examples:
+      search_company_filings("ASML", "single source")
+      search_company_filings("Lam Research", "China export control")
+      search_company_filings("Entegris", "supply chain risk")
+      search_company_filings("Air Products", "neon")
+
+    Returns filing excerpts with company name, form type, filing date, and URL.
+    """
+    try:
+        results = await _edgar.search_filings(company, topic)
+    except Exception as exc:
+        return json.dumps({"error": f"EDGAR search failed: {exc}"})
     return json.dumps(results, ensure_ascii=False, indent=2)
 
 

@@ -19,6 +19,12 @@ MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ENABLE_EVAL = os.environ.get("ENABLE_EVAL", "").strip().lower() in {"1", "true", "yes"}
 
+# Optional: UN Comtrade trade flow API (free key at comtradeapi.un.org)
+COMTRADE_API_KEY = os.environ.get("COMTRADE_API_KEY", "")
+
+# Optional: ITA Consolidated Screening List (free key at developer.trade.gov)
+ITA_API_KEY = os.environ.get("ITA_API_KEY", "")
+
 
 def validate_config() -> None:
     if not NEWSAPI_KEY:
