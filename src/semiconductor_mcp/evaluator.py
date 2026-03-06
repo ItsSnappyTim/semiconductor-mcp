@@ -303,6 +303,29 @@ Strip question words (does, is, are, what, how, why), keep technical nouns and v
 Output ONLY the search query string, nothing else.
 """
 
+_ENTITY_EXTRACTION_SYSTEM = """\
+Extract company or organization names explicitly mentioned in this question.
+Output ONLY a JSON array of strings (max 3), e.g. ["ASML", "TSMC", "Huawei"].
+If no companies or organizations are named, return [].
+"""
+
+
+async def extract_entities(client: httpx.AsyncClient, question: str) -> list[str]:
+    """Extract named company/organization entities from a question using Haiku."""
+    try:
+        raw = await _call_haiku(
+            client,
+            _ENTITY_EXTRACTION_SYSTEM,
+            f"<question>{question}</question>",
+            max_tokens=64,
+        )
+        result = _extract_json(raw)
+        if isinstance(result, list):
+            return [str(e) for e in result[:3]]
+    except Exception:
+        pass
+    return []
+
 
 async def question_to_query(client: httpx.AsyncClient, question: str) -> str:
     """Convert a natural language question into search-friendly keywords (max 5 words)."""

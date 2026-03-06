@@ -433,6 +433,7 @@ if ENABLE_EVAL:
     from .evaluator import (
         draft_answer as _draft_answer,
         evaluate_response as _evaluate_response,
+        extract_entities as _extract_entities,
         question_to_query as _question_to_query,
         refine_query as _refine_query,
         _eval_with_client,
@@ -577,6 +578,261 @@ if ENABLE_EVAL:
 
         if not best:
             best = {"error": "All attempts failed to retrieve results"}
+
+        return json.dumps(best, ensure_ascii=False, indent=2)
+
+    @mcp.tool()
+    async def research_and_verify_supply_chain(
+        question: str,
+        threshold: float = 0.9,
+        max_attempts: int = 3,
+    ) -> str:
+        """Research a semiconductor supply chain question and return a verified answer.
+
+        Unlike research_and_verify (which searches academic papers and news),
+        this tool draws context exclusively from supply chain intelligence sources:
+          - Semiconductor fab knowledge base (components, suppliers, export controls)
+          - UN Comtrade annual trade flow data (when HS codes are available)
+          - GDELT supply chain news signals (past 90 days)
+          - GDELT grey market / smuggling signals (past 180 days)
+          - NewsAPI semiconductor enforcement and compliance news
+          - SEC EDGAR 10-K/10-Q supply chain risk disclosures (for named companies)
+          - OpenSanctions entity screening (for named companies)
+
+        Runs the same verify loop as research_and_verify:
+          1. Extract search keywords and any named entities from the question
+          2. Gather context from all supply chain sources concurrently
+          3. Draft a context-grounded answer
+          4. Evaluate faithfulness, answer relevancy, and context utilization
+          5. If composite score < threshold, refine query and retry
+          6. Return when score >= threshold or attempts exhausted
+
+        Use this for questions about: component availability, supplier concentration,
+        export controls, grey market risk, sanctions exposure, or trade flow analysis.
+
+        IMPORTANT: After presenting the answer to the user, always display:
+
+        1. Sources consulted — list each source as:
+             • [title] (type) — url
+
+        2. Confidence scores from the evaluation field:
+             • Composite: <composite_score>
+             • Faithfulness: <faithfulness.score>
+             • Answer relevancy: <answer_relevancy.score>
+             • Context utilization: <context_utilization.score>
+        """
+        threshold = max(0.0, min(threshold, 1.0))
+        max_attempts = max(1, min(max_attempts, 5))
+
+        best: dict[str, Any] = {}
+        best_score: float = -1.0
+
+        async with _httpx.AsyncClient(timeout=60) as client:
+            # Extract search keywords and named entities concurrently
+            query, entities = await asyncio.gather(
+                _question_to_query(client, question),
+                _extract_entities(client, question),
+            )
+
+            # Knowledge base context is stable — compute once before the retry loop
+            kb_result = _kb_search(query)
+            top_comp = kb_result["components"][0] if kb_result.get("components") else None
+            hs_codes = top_comp.get("hs_codes", []) if top_comp else []
+
+            kb_contexts: list[str] = []
+            kb_sources: list[dict[str, Any]] = []
+            for comp in kb_result.get("components", [])[:3]:
+                suppliers = ", ".join(
+                    f"{s['name']} ({s['country']})"
+                    for s in comp.get("key_suppliers", [])[:3]
+                )
+                text = (
+                    f"Component: {comp['name']}. "
+                    f"Availability: {comp.get('availability', 'unknown')}. "
+                    f"Geographic concentration: {comp.get('geographic_concentration', 'unknown')}. "
+                    f"Supply risks: {'; '.join(comp.get('supply_risks', []))}. "
+                    f"Key suppliers: {suppliers}. "
+                    f"Export controls: {comp.get('export_controls', {}).get('detail', 'none')}. "
+                    f"Grey market risk: {comp.get('grey_market_risk', 'unknown')} — "
+                    f"{comp.get('grey_market_detail', '')}."
+                )
+                kb_contexts.append(text)
+                kb_sources.append({"type": "knowledge_base", "title": comp["name"], "url": ""})
+            for step in kb_result.get("process_steps", [])[:2]:
+                text = (
+                    f"Process step: {step['name']}. "
+                    f"{step.get('description', '')} "
+                    f"Required components: {', '.join(step.get('component_ids', []))}."
+                )
+                kb_contexts.append(text)
+                kb_sources.append({"type": "knowledge_base", "title": step["name"], "url": ""})
+
+            # Comtrade is also stable (annual data) — fetch once if we have an HS code
+            trade_context: list[str] = []
+            trade_sources: list[dict[str, Any]] = []
+            if hs_codes and COMTRADE_API_KEY:
+                try:
+                    trade_data = await _comtrade.get_trade_flow(hs_codes[0], COMTRADE_API_KEY)
+                    if isinstance(trade_data, dict) and trade_data.get("top_exporters"):
+                        exporters_str = ", ".join(
+                            f"{e['country']} ({e['share_pct']}%)"
+                            for e in trade_data["top_exporters"][:5]
+                        )
+                        trade_context.append(
+                            f"UN Comtrade trade flow for HS {trade_data['hs_code']} "
+                            f"({trade_data.get('year', 'N/A')}): "
+                            f"top exporters are {exporters_str}. "
+                            f"Total exports: USD {trade_data.get('total_exports_usd', 0):,}."
+                        )
+                        trade_sources.append({
+                            "type": "comtrade",
+                            "title": f"Comtrade HS {trade_data['hs_code']}",
+                            "url": "https://comtradeplus.un.org/",
+                        })
+                except Exception:
+                    pass
+
+            for attempt in range(1, max_attempts + 1):
+                contexts = kb_contexts + trade_context
+                sources = kb_sources + trade_sources
+
+                # Gather dynamic sources concurrently
+                gdelt_sc_coro = _gdelt.search_supply_chain_news(query, days=90)
+                gdelt_gm_coro = _gdelt.search_grey_market_signals(query, days=180)
+                news_coro = newsapi.search(
+                    f"{query} semiconductor supply chain", max_results=5
+                )
+                dynamic_results = await asyncio.gather(
+                    gdelt_sc_coro, gdelt_gm_coro, news_coro,
+                    return_exceptions=True,
+                )
+
+                gdelt_sc = dynamic_results[0] if not isinstance(dynamic_results[0], Exception) else []
+                gdelt_gm = dynamic_results[1] if not isinstance(dynamic_results[1], Exception) else []
+                news_res = dynamic_results[2] if not isinstance(dynamic_results[2], Exception) else []
+
+                for article in (gdelt_sc or [])[:6]:
+                    if article.get("title"):
+                        contexts.append(
+                            f"Supply chain news: {article['title']}. "
+                            f"Source: {article.get('domain', '')}. "
+                            f"Date: {str(article.get('seendate', ''))[:10]}."
+                        )
+                        sources.append({
+                            "type": "gdelt",
+                            "title": article["title"],
+                            "url": article.get("url", ""),
+                        })
+
+                for article in (gdelt_gm or [])[:4]:
+                    if article.get("title"):
+                        contexts.append(
+                            f"Grey market/enforcement signal: {article['title']}. "
+                            f"Source: {article.get('domain', '')}. "
+                            f"Date: {str(article.get('seendate', ''))[:10]}."
+                        )
+                        sources.append({
+                            "type": "gdelt_grey_market",
+                            "title": article["title"],
+                            "url": article.get("url", ""),
+                        })
+
+                for r in (news_res or [])[:4]:
+                    if r.get("description"):
+                        contexts.append(f"{r['title']}: {r['description']}")
+                        sources.append({
+                            "type": "news",
+                            "title": r["title"],
+                            "url": r.get("url", ""),
+                            "published_at": r.get("published_at", ""),
+                        })
+
+                # Entity-specific: EDGAR + sanctions (gather all at once)
+                if entities:
+                    entity_coros: list = []
+                    for entity in entities[:2]:
+                        entity_coros.append(_edgar.search_filings(entity, query[:50]))
+                        entity_coros.append(_opensanctions.screen_entity(entity))
+                    entity_raw = await asyncio.gather(*entity_coros, return_exceptions=True)
+
+                    for i, entity in enumerate(entities[:2]):
+                        edgar_res = entity_raw[i * 2]
+                        sanc_res = entity_raw[i * 2 + 1]
+
+                        if not isinstance(edgar_res, Exception) and isinstance(edgar_res, list):
+                            for filing in edgar_res[:2]:
+                                excerpt = filing.get("excerpt", "")
+                                if excerpt:
+                                    contexts.append(
+                                        f"{filing.get('company_name', entity)} "
+                                        f"{filing.get('form_type', 'filing')} "
+                                        f"({str(filing.get('filed_at', ''))[:10]}): "
+                                        f"{excerpt[:500]}"
+                                    )
+                                    sources.append({
+                                        "type": "edgar",
+                                        "title": f"{entity} {filing.get('form_type', 'SEC Filing')}",
+                                        "url": filing.get("file_url", ""),
+                                    })
+
+                        if not isinstance(sanc_res, Exception) and isinstance(sanc_res, dict):
+                            if sanc_res.get("total", 0) > 0:
+                                lists = list({
+                                    m.get("dataset", "")
+                                    for m in sanc_res.get("matches", [])[:5]
+                                    if m.get("dataset")
+                                })
+                                contexts.append(
+                                    f"Sanctions check for {entity}: "
+                                    f"risk={sanc_res.get('risk', 'UNKNOWN')}, "
+                                    f"{sanc_res['total']} match(es) on lists including: "
+                                    f"{', '.join(lists[:5])}."
+                                )
+                                sources.append({
+                                    "type": "opensanctions",
+                                    "title": f"{entity} sanctions check",
+                                    "url": f"https://www.opensanctions.org/search/?q={entity}",
+                                })
+
+                if not contexts:
+                    if not best:
+                        best = {"error": f"No supply chain context retrieved for: {query!r}"}
+                    break
+
+                answer = await _draft_answer(client, question, contexts)
+                eval_result = await _eval_with_client(client, question, contexts, answer)
+                composite = eval_result.get("composite_score") or 0.0
+
+                if composite > best_score:
+                    best_score = composite
+                    best = {
+                        "answer": answer,
+                        "sources": sources,
+                        "evaluation": eval_result,
+                        "query_used": query,
+                        "entities_extracted": entities,
+                        "attempt": attempt,
+                        "threshold_met": composite >= threshold,
+                    }
+
+                if composite >= threshold:
+                    break
+
+                if attempt < max_attempts:
+                    low_metric = min(
+                        ("faithfulness", eval_result["metrics"]["faithfulness"].get("score") or 0),
+                        ("answer_relevancy", eval_result["metrics"]["answer_relevancy"].get("score") or 0),
+                        ("context_utilization", eval_result["metrics"]["context_utilization"].get("score") or 0),
+                        key=lambda x: x[1],
+                    )
+                    issue = (
+                        f"{low_metric[0]} score was {low_metric[1]:.2f} — "
+                        "need more specific supply chain data"
+                    )
+                    query = await _refine_query(client, question, query, issue)
+
+        if not best:
+            best = {"error": "All attempts failed to retrieve supply chain context"}
 
         return json.dumps(best, ensure_ascii=False, indent=2)
 
