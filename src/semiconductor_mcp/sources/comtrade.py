@@ -1,10 +1,11 @@
 """UN Comtrade API client — optional, requires free COMTRADE_API_KEY.
 
-New Comtrade API (comtradeapi.un.org) requires a subscription key.
-Free tier available with registration at https://comtradeapi.un.org/
+Free key available at comtradeapi.un.org (Public - v1 tier).
 
-Without a key, returns an informational response with the HS code so the
-user can look up data manually at comtradeapi.un.org.
+Notes on free tier behaviour:
+- World aggregate (reporterCode=0) returns no data; must use specific country codes.
+- Descriptor fields (reporterDesc, cmdDesc, flowDesc) are null; we map codes to names.
+- HS codes must be 6 digits with no period (e.g. "280530" not "2805.30").
 """
 
 from typing import Any
@@ -14,12 +15,31 @@ import httpx
 _BASE = "https://comtradeapi.un.org/data/v1/get/C/A/HS"
 _TIMEOUT = 30
 
+# Major semiconductor supply chain countries (ISO numeric codes)
+_REPORTER_CODES = (
+    "156,840,392,276,410,158,528,56,250,826,643,36,124,076,356,764,702,704,616,528"
+)
 
-async def get_trade_flow(hs_code: str, api_key: str, year: int = 2023) -> dict[str, Any]:
-    """Retrieve annual trade flow data for an HS commodity code.
+# Mapping of ISO numeric → country name for display
+_COUNTRY_NAMES: dict[int, str] = {
+    156: "China", 840: "USA", 392: "Japan", 276: "Germany", 410: "South Korea",
+    158: "Taiwan", 528: "Netherlands", 56: "Belgium", 250: "France", 826: "UK",
+    643: "Russia", 36: "Australia", 124: "Canada", 76: "Brazil", 356: "India",
+    764: "Thailand", 702: "Singapore", 704: "Vietnam", 616: "Poland",
+    752: "Sweden", 756: "Switzerland", 442: "Luxembourg", 372: "Ireland",
+}
 
-    Returns top exporting and importing countries with volumes (USD thousands).
-    Requires COMTRADE_API_KEY.
+
+def _normalise_hs(code: str) -> str:
+    """Strip dots and spaces: '2805.30' → '280530'."""
+    return code.replace(".", "").replace(" ", "")
+
+
+async def get_trade_flow(hs_code: str, api_key: str, year: int = 2022) -> dict[str, Any]:
+    """Retrieve annual export trade flow data for an HS commodity code.
+
+    Returns top exporting countries with volumes (USD thousands).
+    Requires COMTRADE_API_KEY (free Public-v1 tier key).
     """
     if not api_key:
         return {
@@ -27,24 +47,20 @@ async def get_trade_flow(hs_code: str, api_key: str, year: int = 2023) -> dict[s
             "year": year,
             "data": [],
             "note": (
-                f"COMTRADE_API_KEY not configured. Register free at "
-                f"https://comtradeapi.un.org/ to enable trade flow data. "
-                f"Manual lookup: https://comtradeplus.un.org/TradeFlow?"
-                f"Frequency=A&Flows=X,M&CommodityCodes={hs_code}&partners=0&reporters=all"
-                f"&period={year}&AggregateBy=none&BreakdownMode=plus"
+                "COMTRADE_API_KEY not configured. Register free at "
+                "comtradeapi.un.org to enable trade flow data."
             ),
         }
 
+    cmd_code = _normalise_hs(hs_code)
     params = {
-        "reporterCode": "0",   # 0 = world aggregated
+        "reporterCode": _REPORTER_CODES,
         "period": str(year),
-        "partnerCode": "0",    # 0 = all partners
-        "cmdCode": hs_code,
-        "flowCode": "X,M",     # exports and imports
+        "partnerCode": "0",       # 0 = all partners (world total for each reporter)
+        "cmdCode": cmd_code,
+        "flowCode": "X",          # exports
         "maxRecords": "500",
         "format": "JSON",
-        "breakdownMode": "plus",
-        "countOnly": "false",
     }
     headers = {"Ocp-Apim-Subscription-Key": api_key}
 
@@ -61,38 +77,38 @@ async def get_trade_flow(hs_code: str, api_key: str, year: int = 2023) -> dict[s
         return {"hs_code": hs_code, "data": [], "error": str(exc)}
 
     records = data.get("data", [])
+    if not records:
+        return {
+            "hs_code": hs_code,
+            "year": year,
+            "data": [],
+            "note": f"No data returned for HS {hs_code} in {year}. Try an adjacent year.",
+        }
 
-    # Summarize: top exporters and importers
-    exporters: dict[str, float] = {}
-    importers: dict[str, float] = {}
+    # Aggregate by reporter country (sum across partner rows)
+    exporters: dict[int, float] = {}
     for r in records:
-        reporter = r.get("reporterDesc", r.get("reporterCode", ""))
-        flow = r.get("flowDesc", r.get("flowCode", ""))
-        value = float(r.get("primaryValue", 0) or 0)
-        if "export" in flow.lower():
-            exporters[reporter] = exporters.get(reporter, 0) + value
-        elif "import" in flow.lower():
-            importers[reporter] = importers.get(reporter, 0) + value
+        code = r.get("reporterCode")
+        value = float(r.get("primaryValue") or 0)
+        if code is not None:
+            exporters[int(code)] = exporters.get(int(code), 0) + value
 
+    total = sum(exporters.values())
     top_exporters = sorted(exporters.items(), key=lambda x: x[1], reverse=True)[:10]
-    top_importers = sorted(importers.items(), key=lambda x: x[1], reverse=True)[:10]
-    total_export = sum(exporters.values())
 
     return {
         "hs_code": hs_code,
         "year": year,
-        "total_exports_usd_thousands": round(total_export),
+        "total_exports_usd": round(total),
         "top_exporters": [
             {
-                "country": country,
-                "value_usd_thousands": round(val),
-                "share_pct": round(val / total_export * 100, 1) if total_export else 0,
+                "country": _COUNTRY_NAMES.get(code, f"Code {code}"),
+                "reporter_code": code,
+                "value_usd": round(val),
+                "share_pct": round(val / total * 100, 1) if total else 0,
             }
-            for country, val in top_exporters
-        ],
-        "top_importers": [
-            {"country": country, "value_usd_thousands": round(val)}
-            for country, val in top_importers
+            for code, val in top_exporters
         ],
         "record_count": len(records),
+        "note": f"Export data for {len(_REPORTER_CODES.split(','))} major semiconductor supply chain countries.",
     }
