@@ -41,9 +41,17 @@ async def _call_haiku(client: httpx.AsyncClient, system: str, user: str, max_tok
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
-    resp = await client.post(_API_URL, headers=_headers(), json=payload)
-    resp.raise_for_status()
-    return resp.json()["content"][0]["text"]
+    # Retry with backoff on 429 — free-tier Anthropic key has per-minute limits
+    for delay in [0.0, 2.0, 5.0]:
+        if delay:
+            await asyncio.sleep(delay)
+        resp = await client.post(_API_URL, headers=_headers(), json=payload)
+        if resp.status_code == 429:
+            continue
+        resp.raise_for_status()
+        return resp.json()["content"][0]["text"]
+    resp.raise_for_status()  # raise on final 429
+    return ""  # unreachable
 
 
 def _extract_json(text: str) -> Any:
@@ -343,12 +351,10 @@ async def question_to_query(client: httpx.AsyncClient, question: str) -> str:
 async def _eval_with_client(
     client: httpx.AsyncClient, question: str, contexts: list[str], answer: str
 ) -> dict[str, Any]:
-    """Run all three metrics and return the raw dict (no JSON serialisation)."""
-    faith, relevancy, ctx_util = await asyncio.gather(
-        _faithfulness(client, question, contexts, answer),
-        _answer_relevancy(client, question, contexts, answer),
-        _context_utilization(client, question, contexts, answer),
-    )
+    """Run all three metrics sequentially to stay gentle on Anthropic rate limits."""
+    faith     = await _faithfulness(client, question, contexts, answer)
+    relevancy = await _answer_relevancy(client, question, contexts, answer)
+    ctx_util  = await _context_utilization(client, question, contexts, answer)
     scores = [m["score"] for m in (faith, relevancy, ctx_util) if m.get("score") is not None]
     composite = round(sum(scores) / len(scores), 3) if scores else None
     return {
@@ -368,11 +374,9 @@ async def _eval_with_client(
 
 async def evaluate_response(question: str, contexts: list[str], answer: str) -> str:
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        faith, relevancy, ctx_util = await asyncio.gather(
-            _faithfulness(client, question, contexts, answer),
-            _answer_relevancy(client, question, contexts, answer),
-            _context_utilization(client, question, contexts, answer),
-        )
+        faith     = await _faithfulness(client, question, contexts, answer)
+        relevancy = await _answer_relevancy(client, question, contexts, answer)
+        ctx_util  = await _context_utilization(client, question, contexts, answer)
 
     scores = [m["score"] for m in (faith, relevancy, ctx_util) if m.get("score") is not None]
     composite = round(sum(scores) / len(scores), 3) if scores else None

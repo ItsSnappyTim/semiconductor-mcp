@@ -17,6 +17,7 @@ import httpx
 _BASE = "http://api.gdeltproject.org/api/v2/doc/doc"
 _TIMEOUT = 25
 _RETRY_DELAYS = [3.0, 6.0]  # seconds to wait after 429 before retrying
+_HEADERS = {"User-Agent": "semiconductor-mcp-research/1.0"}
 
 # Serialise all GDELT requests — only one in-flight at a time per process.
 # Lazily initialised so it is created inside the running event loop.
@@ -46,7 +47,7 @@ async def _search(query: str, days: int, max_records: int = 10) -> list[dict[str
                 for delay in [0] + _RETRY_DELAYS:
                     if delay:
                         await asyncio.sleep(delay)
-                    resp = await client.get(_BASE, params=params)
+                    resp = await client.get(_BASE, params=params, headers=_HEADERS)
                     if resp.status_code == 429:
                         last_error = "GDELT rate limit (429)"
                         continue

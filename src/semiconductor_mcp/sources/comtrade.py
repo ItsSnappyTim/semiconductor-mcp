@@ -8,12 +8,14 @@ Notes on free tier behaviour:
 - HS codes must be 6 digits with no period (e.g. "280530" not "2805.30").
 """
 
+import asyncio
 from typing import Any
 
 import httpx
 
 _BASE = "https://comtradeapi.un.org/data/v1/get/C/A/HS"
 _TIMEOUT = 30
+_RETRY_DELAYS = [5.0, 15.0]  # Comtrade free tier is strict on rate limits
 
 # Major semiconductor supply chain countries (ISO numeric codes)
 _REPORTER_CODES = (
@@ -64,11 +66,21 @@ async def get_trade_flow(hs_code: str, api_key: str, year: int = 2022) -> dict[s
     }
     headers = {"Ocp-Apim-Subscription-Key": api_key}
 
+    last_error = ""
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(_BASE, params=params, headers=headers)
-            resp.raise_for_status()
-        data = resp.json()
+            for delay in [0.0] + _RETRY_DELAYS:
+                if delay:
+                    await asyncio.sleep(delay)
+                resp = await client.get(_BASE, params=params, headers=headers)
+                if resp.status_code == 429:
+                    last_error = f"Comtrade rate limited (429)"
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            else:
+                return {"hs_code": hs_code, "data": [], "error": last_error}
     except httpx.TimeoutException:
         return {"hs_code": hs_code, "data": [], "error": "Comtrade API timeout"}
     except httpx.HTTPStatusError as exc:

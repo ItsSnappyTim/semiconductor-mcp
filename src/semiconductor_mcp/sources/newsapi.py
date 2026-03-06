@@ -5,6 +5,10 @@ import httpx
 from ..config import NEWSAPI_KEY
 
 _BASE = "https://newsapi.org/v2/everything"
+_HEADERS = {
+    "User-Agent": "semiconductor-mcp-research/1.0",
+    "X-Api-Key": NEWSAPI_KEY,
+}
 
 
 async def search(query: str, max_results: int = 5) -> list[dict[str, Any]]:
@@ -15,7 +19,7 @@ async def search(query: str, max_results: int = 5) -> list[dict[str, Any]]:
         "pageSize": max_results,
     }
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(_BASE, params=params, headers={"X-Api-Key": NEWSAPI_KEY})
+        resp = await client.get(_BASE, params=params, headers=_HEADERS)
         resp.raise_for_status()
 
     data = resp.json()

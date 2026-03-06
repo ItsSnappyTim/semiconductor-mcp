@@ -1,6 +1,7 @@
-import defusedxml.ElementTree as ET
+import asyncio
 from typing import Any
 
+import defusedxml.ElementTree as ET
 import httpx
 
 _NS = {
@@ -9,6 +10,9 @@ _NS = {
 }
 
 _BASE = "https://export.arxiv.org/api/query"
+_HEADERS = {"User-Agent": "semiconductor-mcp-research/1.0"}
+_TIMEOUT = 30
+_RETRY_DELAYS = [5.0, 15.0]  # arXiv asks for delays between requests
 
 
 async def search(query: str, max_results: int = 5) -> list[dict[str, Any]]:
@@ -25,9 +29,25 @@ async def search(query: str, max_results: int = 5) -> list[dict[str, Any]]:
         "max_results": max_results,
         "sortBy": "relevance",
     }
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(_BASE, params=params)
-        resp.raise_for_status()
+
+    last_error = ""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            for delay in [0.0] + _RETRY_DELAYS:
+                if delay:
+                    await asyncio.sleep(delay)
+                resp = await client.get(_BASE, params=params, headers=_HEADERS)
+                if resp.status_code == 429:
+                    last_error = "arXiv rate limited (429)"
+                    continue
+                resp.raise_for_status()
+                break
+            else:
+                return []  # all retries exhausted
+    except httpx.TimeoutException:
+        return []
+    except httpx.HTTPStatusError:
+        return []
 
     root = ET.fromstring(resp.text)
     results = []

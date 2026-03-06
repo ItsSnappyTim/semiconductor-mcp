@@ -21,11 +21,19 @@ from .sources import arxiv, newsapi, semantic_scholar
 from .sources import bis_screening as _bis_screening
 from .sources import comtrade as _comtrade
 from .sources import edgar as _edgar
+from .sources import federal_register as _federal_register
 from .sources import gdelt as _gdelt
 from .sources import opensanctions as _opensanctions
+from .sources import pubchem as _pubchem
+from .sources import world_bank as _world_bank
 
 # Validate required config at startup
 validate_config()
+
+
+def _truncate(value: str, max_len: int) -> str:
+    """Silently truncate a string input to prevent excessively long API queries."""
+    return value[:max_len] if len(value) > max_len else value
 
 # Ensure whitepaper directory exists
 WHITEPAPER_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,52 +75,6 @@ async def health(_: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def search_academic(query: str, max_results: int = 5) -> str:
-    """Search arXiv and Semantic Scholar for academic papers on a topic.
-
-    Returns deduplicated results ranked by source. Use for fact-checking
-    technical claims about semiconductor processes, materials, and equipment.
-    """
-    max_results = max(1, min(max_results, 20))
-    try:
-        arxiv_results, ss_results = await asyncio.gather(
-            arxiv.search(query, max_results),
-            semantic_scholar.search(query, max_results),
-        )
-    except Exception as exc:
-        return json.dumps({"error": f"Search failed: {exc}"})
-
-    # Deduplicate by DOI (prefer Semantic Scholar entry which has citation count)
-    seen_dois: set[str] = set()
-    combined: list[dict[str, Any]] = []
-
-    for result in ss_results + arxiv_results:
-        doi = result.get("doi")
-        if doi:
-            if doi in seen_dois:
-                continue
-            seen_dois.add(doi)
-        combined.append(result)
-
-    return json.dumps(combined[:max_results * 2], ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-async def search_news(query: str, max_results: int = 5) -> str:
-    """Search recent semiconductor industry news via NewsAPI.
-
-    Use for tracking current events: fab announcements, equipment orders,
-    technology roadmap updates, company earnings, and supply chain news.
-    """
-    max_results = max(1, min(max_results, 20))
-    try:
-        results = await newsapi.search(query, max_results)
-    except Exception as exc:
-        return json.dumps({"error": f"News search failed: {exc}"})
-    return json.dumps(results, ensure_ascii=False, indent=2)
-
 
 @mcp.tool()
 async def add_whitepaper(file_path: str) -> str:
@@ -178,6 +140,7 @@ async def search_whitepapers(query: str, max_results: int = 5) -> str:
     Returns matching documents with highlighted excerpt snippets showing
     where the query terms appear in the text.
     """
+    query = _truncate(query, 500)
     max_results = max(1, min(max_results, 20))
     try:
         results = search_fts(query, max_results)
@@ -197,108 +160,8 @@ async def list_whitepapers() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Supply chain intelligence tools
+# Compliance screening
 # ---------------------------------------------------------------------------
-
-@mcp.tool()
-async def lookup_fab_component(query: str) -> str:
-    """Search the semiconductor fab process knowledge base.
-
-    Accepts component names, material names, process step names, chemical
-    symbols, or equipment names (e.g. "EUV", "gallium", "CMP", "HF",
-    "lithography", "cobalt", "ALD", "neon").
-
-    Returns:
-      - Matching components with: availability classification, key global
-        suppliers with market share, export control status and ECCN,
-        grey market risk level and detail, process steps where used,
-        geographic supply concentration, and critical mineral flag.
-      - Matching process steps with their required component list.
-
-    Availability classes: commodity | specialized | dual_source |
-    single_source | export_controlled
-    Grey market risk: low | medium | high | critical
-    """
-    results = _kb_search(query)
-
-    # Enrich top high-risk components with live OpenSanctions supplier check
-    enriched_components = []
-    for comp in results.get("components", []):
-        enriched = dict(comp)
-        if comp.get("grey_market_risk") in ("high", "critical"):
-            suppliers = comp.get("key_suppliers", [])
-            if suppliers:
-                top_supplier = suppliers[0].get("name", "")
-                if top_supplier:
-                    try:
-                        screen = await _opensanctions.screen_entity(top_supplier, OPENSANCTIONS_API_KEY)
-                        enriched["supplier_sanctions_check"] = {
-                            "screened_entity": top_supplier,
-                            "risk": screen.get("risk"),
-                            "matches": len(screen.get("matches", [])),
-                        }
-                    except Exception:
-                        pass
-        enriched_components.append(enriched)
-
-    results["components"] = enriched_components
-    return json.dumps(results, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-async def get_supply_chain_status(component: str) -> str:
-    """Get live supply chain status for a semiconductor component or material.
-
-    Combines:
-    - Knowledge base risk data (availability, suppliers, geographic concentration)
-    - UN Comtrade annual trade flow data (if COMTRADE_API_KEY is configured)
-    - GDELT news signals from the past 90 days (always available)
-
-    Use to assess current availability, geographic concentration, and
-    recent disruption events for a specific component.
-    """
-    kb = _kb_search(component)
-    top_comp = kb["components"][0] if kb["components"] else None
-
-    # Determine HS codes to query
-    hs_codes = top_comp.get("hs_codes", []) if top_comp else []
-
-    async def _no_trade() -> dict:
-        return {"note": "No HS code available for this component"}
-
-    # Run trade flow + GDELT concurrently
-    trade_coro = (
-        _comtrade.get_trade_flow(hs_codes[0], COMTRADE_API_KEY)
-        if hs_codes
-        else _no_trade()
-    )
-    gdelt_coro = _gdelt.search_supply_chain_news(component, days=90)
-
-    trade_data, news_signals = await asyncio.gather(
-        trade_coro, gdelt_coro, return_exceptions=True
-    )
-
-    if isinstance(trade_data, Exception):
-        trade_data = {"error": str(trade_data)}
-    if isinstance(news_signals, Exception):
-        news_signals = []
-
-    result = {
-        "component": component,
-        "knowledge_base": {
-            "name": top_comp.get("name") if top_comp else None,
-            "availability": top_comp.get("availability") if top_comp else None,
-            "geographic_concentration": top_comp.get("geographic_concentration") if top_comp else None,
-            "supply_risks": top_comp.get("supply_risks", []) if top_comp else [],
-            "key_suppliers": top_comp.get("key_suppliers", []) if top_comp else [],
-            "critical_mineral": top_comp.get("critical_mineral") if top_comp else None,
-        },
-        "trade_flow": trade_data,
-        "news_signals": news_signals[:10],
-        "news_signal_count": len(news_signals) if isinstance(news_signals, list) else 0,
-    }
-    return json.dumps(result, ensure_ascii=False, indent=2)
-
 
 @mcp.tool()
 async def screen_entity(entity_name: str, country: str = "") -> str:
@@ -320,6 +183,8 @@ async def screen_entity(entity_name: str, country: str = "") -> str:
     Use before engaging any unfamiliar supplier, especially for controlled
     semiconductor equipment, materials, or technology.
     """
+    entity_name = _truncate(entity_name, 200)
+    country = _truncate(country, 100)
     opensanctions_future = _opensanctions.screen_entity(entity_name, OPENSANCTIONS_API_KEY)
     bis_future = _bis_screening.screen_entity(entity_name, ITA_API_KEY)
 
@@ -352,82 +217,6 @@ async def screen_entity(entity_name: str, country: str = "") -> str:
         }.get(aggregate_risk, "Unable to determine risk."),
     }
     return json.dumps(result, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-async def get_grey_market_signals(query: str) -> str:
-    """Search for grey market, smuggling, and sanctions evasion signals.
-
-    Searches GDELT for recent news (past 180 days) about:
-    smuggling, grey market, sanctions evasion, export control violations,
-    counterfeit goods, and diversion activity related to the query term.
-
-    Also runs a targeted NewsAPI search for enforcement and compliance angles.
-
-    Use to assess whether a component or company is associated with known
-    grey market activity, criminal networks, or sanctions circumvention.
-    """
-    grey_future = _gdelt.search_grey_market_signals(query, days=180)
-    news_future = newsapi.search(
-        f"{query} semiconductor export control enforcement sanctions", max_results=5
-    )
-
-    gdelt_results, news_results = await asyncio.gather(
-        grey_future, news_future, return_exceptions=True
-    )
-
-    if isinstance(gdelt_results, Exception):
-        gdelt_results = [{"error": str(gdelt_results)}]
-    if isinstance(news_results, Exception):
-        news_results = []
-
-    # Assess signal strength
-    signal_count = len(gdelt_results) if isinstance(gdelt_results, list) else 0
-    signal_strength = (
-        "HIGH" if signal_count >= 8
-        else "MEDIUM" if signal_count >= 3
-        else "LOW" if signal_count >= 1
-        else "NONE"
-    )
-
-    result = {
-        "query": query,
-        "signal_strength": signal_strength,
-        "gdelt_articles": gdelt_results,
-        "news_articles": news_results,
-        "interpretation": {
-            "HIGH": "Significant recent news activity around grey market/enforcement for this topic.",
-            "MEDIUM": "Some recent signals; warrants monitoring and due diligence.",
-            "LOW": "Limited signals; may reflect recent events or emerging concern.",
-            "NONE": "No recent grey market signals found in news sources.",
-        }.get(signal_strength, ""),
-    }
-    return json.dumps(result, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-async def search_company_filings(company: str, topic: str = "supply chain") -> str:
-    """Search SEC EDGAR 10-K and 10-Q filings for supply chain risk disclosures.
-
-    Major semiconductor equipment and materials companies (ASML, Applied Materials,
-    Lam Research, KLA, Tokyo Electron, Shin-Etsu, Air Products, Entegris, etc.)
-    are legally required to disclose single-source dependencies, geographic
-    concentration risks, export control impacts, and supply chain disruptions
-    in their SEC filings.
-
-    Examples:
-      search_company_filings("ASML", "single source")
-      search_company_filings("Lam Research", "China export control")
-      search_company_filings("Entegris", "supply chain risk")
-      search_company_filings("Air Products", "neon")
-
-    Returns filing excerpts with company name, form type, filing date, and URL.
-    """
-    try:
-        results = await _edgar.search_filings(company, topic)
-    except Exception as exc:
-        return json.dumps({"error": f"EDGAR search failed: {exc}"})
-    return json.dumps(results, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -595,11 +384,14 @@ if ENABLE_EVAL:
         """Research a semiconductor supply chain question and return a verified answer.
 
         Unlike research_and_verify (which searches academic papers and news),
-        this tool draws context exclusively from supply chain intelligence sources:
+        this tool draws context from all available supply chain intelligence sources:
           - Semiconductor fab knowledge base (components, suppliers, export controls)
           - UN Comtrade annual trade flow data (when HS codes are available)
           - GDELT supply chain news signals (past 90 days)
           - GDELT grey market / smuggling signals (past 180 days)
+          - Federal Register BIS/OFAC regulatory documents (past 12 months)
+          - PubChem chemical properties and GHS safety data (for process chemicals)
+          - Commodity price data for metals (copper, gold, palladium, etc.)
           - NewsAPI semiconductor enforcement and compliance news
           - SEC EDGAR 10-K/10-Q supply chain risk disclosures (for named companies)
           - OpenSanctions entity screening (for named companies)
@@ -734,16 +526,176 @@ if ENABLE_EVAL:
                         "url": article.get("url", ""),
                     })
 
-            for attempt in range(1, max_attempts + 1):
-                contexts = kb_contexts + trade_context + gdelt_contexts
-                sources = kb_sources + trade_sources + gdelt_sources
+            # ---------------------------------------------------------------
+            # Federal Register, PubChem, and commodity prices are all stable
+            # (regulations and prices don't change between retry attempts).
+            # Fetch all three concurrently once, then join to context.
+            # ---------------------------------------------------------------
 
-                # NewsAPI is re-queried each attempt (query may be refined)
-                news_res_raw = await asyncio.gather(
-                    newsapi.search(f"{query} semiconductor supply chain", max_results=5),
-                    return_exceptions=True,
+            # --- Federal Register: BIS/OFAC regulatory docs (past 12 months) ---
+            async def _fetch_fedreg() -> list[dict[str, Any]]:
+                try:
+                    docs = await _federal_register.search_export_controls(query, days=365)
+                    return docs if isinstance(docs, list) else []
+                except Exception:
+                    return []
+
+            # --- PubChem: chemical safety for any chemical KB components found ---
+            _CHEM_CATEGORIES = {"wet_chemistry", "cvd_precursor"}
+            _CHEM_KEYWORDS = {"acid", "gas", "oxide", "fluoride", "chloride", "silane",
+                               "precursor", "developer", "solvent", "etchant"}
+
+            chem_names: list[str] = []
+            for comp in kb_result.get("components", [])[:5]:
+                cat = comp.get("category", "")
+                name_lower = comp.get("name", "").lower()
+                if cat in _CHEM_CATEGORIES or any(kw in name_lower for kw in _CHEM_KEYWORDS):
+                    chem_names.append(comp["name"])
+            # Fall back to the raw query itself (handles direct chemical queries)
+            if not chem_names:
+                chem_names = [query]
+
+            async def _fetch_pubchem() -> list[dict[str, Any]]:
+                results = []
+                for name in chem_names[:2]:  # max 2 lookups
+                    try:
+                        data = await _pubchem.get_chemical_data(name)
+                        if not data.get("error"):
+                            results.append(data)
+                    except Exception:
+                        pass
+                return results
+
+            # --- Commodity prices: metals mentioned in query or KB components ---
+            _METAL_KEYWORDS: dict[str, str] = {
+                "copper": "copper", "gold": "gold", "silver": "silver",
+                "palladium": "palladium", "platinum": "platinum",
+                "aluminum": "aluminum", "aluminium": "aluminum",
+                "cobalt": "cobalt", "tungsten": "tungsten", "tin": "tin",
+                "gallium": "gallium", "germanium": "germanium",
+                "ruthenium": "ruthenium", "nickel": "nickel",
+            }
+            metals_to_fetch: list[str] = []
+            seen_metals: set[str] = set()
+            query_lower = query.lower()
+            for kw, metal in _METAL_KEYWORDS.items():
+                if kw in query_lower and metal not in seen_metals:
+                    metals_to_fetch.append(metal)
+                    seen_metals.add(metal)
+            for comp in kb_result.get("components", [])[:3]:
+                comp_text = (comp.get("name", "") + " " + " ".join(comp.get("aliases", []))).lower()
+                for kw, metal in _METAL_KEYWORDS.items():
+                    if kw in comp_text and metal not in seen_metals:
+                        metals_to_fetch.append(metal)
+                        seen_metals.add(metal)
+
+            async def _fetch_commodity_prices() -> list[dict[str, Any]]:
+                results = []
+                for metal in metals_to_fetch[:3]:  # max 3 price lookups
+                    try:
+                        data = await _world_bank.get_commodity_price(metal)
+                        results.append(data)
+                    except Exception:
+                        pass
+                return results
+
+            # Run all three concurrently — different APIs, no shared rate limits
+            fedreg_raw, pubchem_raw, commodity_raw = await asyncio.gather(
+                _fetch_fedreg(),
+                _fetch_pubchem(),
+                _fetch_commodity_prices(),
+                return_exceptions=True,
+            )
+            if isinstance(fedreg_raw, Exception):
+                fedreg_raw = []
+            if isinstance(pubchem_raw, Exception):
+                pubchem_raw = []
+            if isinstance(commodity_raw, Exception):
+                commodity_raw = []
+
+            # Build Federal Register context
+            fedreg_context: list[str] = []
+            fedreg_sources: list[dict[str, Any]] = []
+            for doc in (fedreg_raw or [])[:4]:
+                if doc.get("title") and not doc.get("error"):
+                    fedreg_context.append(
+                        f"U.S. regulatory document ({doc.get('date', '')[:10]}): "
+                        f"{doc['title']}. "
+                        f"Agency: {', '.join(doc.get('agencies', []))}. "
+                        f"{doc.get('abstract', '')[:300]}"
+                    )
+                    fedreg_sources.append({
+                        "type": "federal_register",
+                        "title": doc["title"],
+                        "url": doc.get("url", ""),
+                    })
+
+            # Build PubChem context
+            chem_context: list[str] = []
+            chem_sources: list[dict[str, Any]] = []
+            for chem in (pubchem_raw or []):
+                ghs = chem.get("ghs", {})
+                hazards = "; ".join(ghs.get("hazard_statements", [])[:3])
+                name_display = chem.get("iupac_name") or chem.get("query", "")
+                chem_context.append(
+                    f"Chemical data for {name_display} "
+                    f"(formula: {chem.get('molecular_formula', '?')}, "
+                    f"MW: {chem.get('molecular_weight', '?')}). "
+                    f"GHS signal: {ghs.get('signal_word', 'unknown')}. "
+                    f"Hazards: {hazards or 'none listed'}."
                 )
-                news_res = news_res_raw[0] if not isinstance(news_res_raw[0], Exception) else []
+                chem_sources.append({
+                    "type": "pubchem",
+                    "title": f"{chem.get('query', '')} chemical safety",
+                    "url": chem.get("pubchem_url", ""),
+                })
+
+            # Build commodity price context
+            commodity_context: list[str] = []
+            commodity_sources: list[dict[str, Any]] = []
+            for price in (commodity_raw or []):
+                metal = price.get("material", "")
+                if price.get("available"):
+                    pct = price.get("pct_change_month")
+                    pct_str = f" ({pct:+.1f}% month-over-month)" if pct is not None else ""
+                    commodity_context.append(
+                        f"Commodity price for {metal}: "
+                        f"{price['latest_price']} {price['unit']} "
+                        f"as of {price.get('latest_date', 'recent')}. "
+                        f"Trend: {price.get('trend', 'unknown')}{pct_str}."
+                    )
+                else:
+                    commodity_context.append(
+                        f"Commodity price for {metal}: not available via free API. "
+                        f"{price.get('note', 'Check USGS or LME for current pricing.')}"
+                    )
+                commodity_sources.append({
+                    "type": "commodity_prices",
+                    "title": f"{metal} price data",
+                    "url": price.get("source_url", price.get("lme_url", "")),
+                })
+
+            # Cache NewsAPI results by query string — only re-fetch when query changes.
+            # NewsAPI quota is limited; hitting it 3× with the same query wastes calls.
+            news_cache: dict[str, list] = {}
+
+            for attempt in range(1, max_attempts + 1):
+                contexts = (
+                    kb_contexts + trade_context + gdelt_contexts
+                    + fedreg_context + chem_context + commodity_context
+                )
+                sources = (
+                    kb_sources + trade_sources + gdelt_sources
+                    + fedreg_sources + chem_sources + commodity_sources
+                )
+
+                news_key = f"{query} semiconductor supply chain"
+                if news_key not in news_cache:
+                    try:
+                        news_cache[news_key] = await newsapi.search(news_key, max_results=5)
+                    except Exception:
+                        news_cache[news_key] = []
+                news_res = news_cache[news_key]
 
                 for r in (news_res or [])[:4]:
                     if r.get("description"):
