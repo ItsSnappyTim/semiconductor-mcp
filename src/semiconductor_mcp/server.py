@@ -697,51 +697,53 @@ if ENABLE_EVAL:
                 except Exception:
                     pass
 
-            for attempt in range(1, max_attempts + 1):
-                contexts = kb_contexts + trade_context
-                sources = kb_sources + trade_sources
+            # Fetch GDELT once before the retry loop — news doesn't change
+            # between attempts, and re-fetching would burn rate limit quota.
+            # The lock in gdelt.py serialises these two sequential calls.
+            gdelt_sc = await _gdelt.search_supply_chain_news(query, days=90)
+            if not isinstance(gdelt_sc, list):
+                gdelt_sc = []
+            gdelt_gm = await _gdelt.search_grey_market_signals(query, days=180)
+            if not isinstance(gdelt_gm, list):
+                gdelt_gm = []
 
-                # Gather dynamic sources concurrently
-                gdelt_sc_coro = _gdelt.search_supply_chain_news(query, days=90)
-                # Stagger grey market call by 1s to avoid GDELT rate limit (429)
-                gdelt_gm_coro = _gdelt.search_grey_market_signals(query, days=180, delay=1.0)
-                news_coro = newsapi.search(
-                    f"{query} semiconductor supply chain", max_results=5
-                )
-                dynamic_results = await asyncio.gather(
-                    gdelt_sc_coro, gdelt_gm_coro, news_coro,
+            gdelt_contexts: list[str] = []
+            gdelt_sources: list[dict[str, Any]] = []
+            for article in gdelt_sc[:6]:
+                if article.get("title"):
+                    gdelt_contexts.append(
+                        f"Supply chain news: {article['title']}. "
+                        f"Source: {article.get('domain', '')}. "
+                        f"Date: {str(article.get('date', ''))[:10]}."
+                    )
+                    gdelt_sources.append({
+                        "type": "gdelt",
+                        "title": article["title"],
+                        "url": article.get("url", ""),
+                    })
+            for article in gdelt_gm[:4]:
+                if article.get("title"):
+                    gdelt_contexts.append(
+                        f"Grey market/enforcement signal: {article['title']}. "
+                        f"Source: {article.get('domain', '')}. "
+                        f"Date: {str(article.get('date', ''))[:10]}."
+                    )
+                    gdelt_sources.append({
+                        "type": "gdelt_grey_market",
+                        "title": article["title"],
+                        "url": article.get("url", ""),
+                    })
+
+            for attempt in range(1, max_attempts + 1):
+                contexts = kb_contexts + trade_context + gdelt_contexts
+                sources = kb_sources + trade_sources + gdelt_sources
+
+                # NewsAPI is re-queried each attempt (query may be refined)
+                news_res_raw = await asyncio.gather(
+                    newsapi.search(f"{query} semiconductor supply chain", max_results=5),
                     return_exceptions=True,
                 )
-
-                gdelt_sc = dynamic_results[0] if not isinstance(dynamic_results[0], Exception) else []
-                gdelt_gm = dynamic_results[1] if not isinstance(dynamic_results[1], Exception) else []
-                news_res = dynamic_results[2] if not isinstance(dynamic_results[2], Exception) else []
-
-                for article in (gdelt_sc or [])[:6]:
-                    if article.get("title"):
-                        contexts.append(
-                            f"Supply chain news: {article['title']}. "
-                            f"Source: {article.get('domain', '')}. "
-                            f"Date: {str(article.get('seendate', ''))[:10]}."
-                        )
-                        sources.append({
-                            "type": "gdelt",
-                            "title": article["title"],
-                            "url": article.get("url", ""),
-                        })
-
-                for article in (gdelt_gm or [])[:4]:
-                    if article.get("title"):
-                        contexts.append(
-                            f"Grey market/enforcement signal: {article['title']}. "
-                            f"Source: {article.get('domain', '')}. "
-                            f"Date: {str(article.get('seendate', ''))[:10]}."
-                        )
-                        sources.append({
-                            "type": "gdelt_grey_market",
-                            "title": article["title"],
-                            "url": article.get("url", ""),
-                        })
+                news_res = news_res_raw[0] if not isinstance(news_res_raw[0], Exception) else []
 
                 for r in (news_res or [])[:4]:
                     if r.get("description"):
