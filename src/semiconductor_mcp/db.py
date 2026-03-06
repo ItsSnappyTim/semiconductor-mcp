@@ -58,6 +58,14 @@ def insert_whitepaper(
         return cur.lastrowid  # type: ignore[return-value]
 
 
+def _escape_fts5(query: str) -> str:
+    """Escape FTS5 special characters to prevent syntax errors or query injection."""
+    # Wrap each whitespace-separated token in double quotes so FTS5 treats
+    # them as literal phrases rather than operators.
+    tokens = query.strip().split()
+    return " ".join(f'"{t.replace(chr(34), "")}"' for t in tokens if t)
+
+
 def search_fts(query: str, max_results: int = 5) -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -70,7 +78,7 @@ def search_fts(query: str, max_results: int = 5) -> list[dict[str, Any]]:
             ORDER BY rank
             LIMIT ?
             """,
-            (query, max_results),
+            (_escape_fts5(query), max_results),
         ).fetchall()
     return [dict(row) for row in rows]
 

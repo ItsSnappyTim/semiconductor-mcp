@@ -140,7 +140,12 @@ async def add_whitepaper(file_path: str) -> str:
         return json.dumps({"error": "File exceeds 50 MB size limit"})
 
     try:
-        title, page_count, full_text = extract_pdf(path)
+        title, page_count, full_text = await asyncio.wait_for(
+            asyncio.to_thread(extract_pdf, path),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        return json.dumps({"error": "PDF extraction timed out (>60s)"})
     except Exception as exc:
         return json.dumps({"error": f"Failed to extract PDF: {exc}"})
 

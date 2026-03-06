@@ -25,26 +25,26 @@ async def _search(query: str, days: int, max_records: int = 10) -> list[dict[str
         "sort": "DateDesc",
     }
     last_error: str = ""
-    for attempt, delay in enumerate([0] + _RETRY_DELAYS):
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            for delay in [0] + _RETRY_DELAYS:
+                if delay:
+                    await asyncio.sleep(delay)
                 resp = await client.get(_BASE, params=params)
                 if resp.status_code == 429:
                     last_error = "GDELT rate limit (429)"
                     continue
                 resp.raise_for_status()
-            data = resp.json()
-            break
-        except httpx.TimeoutException:
-            return [{"error": "GDELT API timeout"}]
-        except httpx.HTTPStatusError as exc:
-            return [{"error": f"GDELT HTTP {exc.response.status_code}"}]
-        except Exception as exc:
-            return [{"error": str(exc)}]
-    else:
-        return [{"error": last_error}]
+                data = resp.json()
+                break
+            else:
+                return [{"error": last_error}]
+    except httpx.TimeoutException:
+        return [{"error": "GDELT API timeout"}]
+    except httpx.HTTPStatusError as exc:
+        return [{"error": f"GDELT HTTP {exc.response.status_code}"}]
+    except Exception as exc:
+        return [{"error": str(exc)}]
 
     articles = data.get("articles", []) if data else []
     return [
