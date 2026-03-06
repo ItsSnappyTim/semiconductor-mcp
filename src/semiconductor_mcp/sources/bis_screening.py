@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-_BASE = "https://api.trade.gov/consolidated_screening_list/search"
+_BASE = "https://data.trade.gov/consolidated_screening_list/v1/search"
 _TIMEOUT = 20
 
 
@@ -37,7 +37,7 @@ async def screen_entity(name: str, api_key: str) -> dict[str, Any]:
             ),
         }
 
-    params = {"q": name, "api_key": api_key}
+    params = {"name": name, "subscription-key": api_key}
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(_BASE, params=params)
@@ -64,13 +64,17 @@ async def screen_entity(name: str, api_key: str) -> dict[str, Any]:
             "end_date": r.get("end_date", ""),
         })
 
-    # Risk classification
-    blocked_sources = {"Entity List", "Denied Persons List", "OFAC SDN"}
-    flagged_sources = {"Unverified List", "OFAC Non-SDN", "AECA Debarred"}
+    # Risk classification (substring match — source names include verbose suffixes)
+    def _matches(source: str, keywords: list[str]) -> bool:
+        s = source.lower()
+        return any(k in s for k in keywords)
+
+    blocked_keywords = ["entity list", "denied persons", "ofac sdn", "sdn list", "military-industrial"]
+    flagged_keywords = ["unverified list", "non-sdn", "aeca debarred", "debarred"]
     risk = "CLEAR"
-    if any(r["source_list"] in blocked_sources for r in results):
+    if any(_matches(r["source_list"], blocked_keywords) for r in results):
         risk = "BLOCKED"
-    elif any(r["source_list"] in flagged_sources for r in results):
+    elif any(_matches(r["source_list"], flagged_keywords) for r in results):
         risk = "FLAGGED"
     elif results:
         risk = "FLAGGED"
