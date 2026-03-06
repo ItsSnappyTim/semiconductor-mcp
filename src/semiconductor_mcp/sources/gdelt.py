@@ -4,9 +4,10 @@ GDELT monitors global news in near real-time. We use it for two purposes:
   1. General supply chain news signals for a component
   2. Grey market / enforcement signals (smuggling, sanctions evasion, counterfeit)
 
-Rate limiting: GDELT enforces a per-IP rate limit. A module-level lock
-serialises all outgoing requests so concurrent tool calls never hit GDELT
-simultaneously. Retry delays are conservative to avoid repeated 429s.
+Rate limiting: GDELT enforces a per-IP rate limit. A module-level semaphore
+caps concurrent outgoing requests at 2 — enough to parallelise the two calls
+inside research_and_verify_supply_chain while preventing pile-ups from
+simultaneous tool invocations. Retry delays are conservative to avoid 429s.
 """
 
 import asyncio
@@ -15,20 +16,22 @@ from typing import Any
 import httpx
 
 _BASE = "http://api.gdeltproject.org/api/v2/doc/doc"
-_TIMEOUT = 25
+_TIMEOUT = 15
 _RETRY_DELAYS = [3.0, 6.0]  # seconds to wait after 429 before retrying
 _HEADERS = {"User-Agent": "semiconductor-mcp-research/1.0"}
 
-# Serialise all GDELT requests — only one in-flight at a time per process.
+# Allow at most 2 concurrent GDELT requests per process — enough to parallelise
+# the two calls inside research_and_verify_supply_chain while still preventing
+# a pile-up if multiple tool calls arrive simultaneously.
 # Lazily initialised so it is created inside the running event loop.
-_lock: asyncio.Lock | None = None
+_sem: asyncio.Semaphore | None = None
 
 
-def _get_lock() -> asyncio.Lock:
-    global _lock
-    if _lock is None:
-        _lock = asyncio.Lock()
-    return _lock
+def _get_sem() -> asyncio.Semaphore:
+    global _sem
+    if _sem is None:
+        _sem = asyncio.Semaphore(2)
+    return _sem
 
 
 async def _search(query: str, days: int, max_records: int = 10) -> list[dict[str, Any]]:
@@ -41,7 +44,7 @@ async def _search(query: str, days: int, max_records: int = 10) -> list[dict[str
         "sort": "DateDesc",
     }
     last_error: str = ""
-    async with _get_lock():
+    async with _get_sem():
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 for delay in [0] + _RETRY_DELAYS:

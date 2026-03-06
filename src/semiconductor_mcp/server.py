@@ -491,13 +491,20 @@ if ENABLE_EVAL:
 
             # Fetch GDELT once before the retry loop — news doesn't change
             # between attempts, and re-fetching would burn rate limit quota.
-            # The lock in gdelt.py serialises these two sequential calls.
-            gdelt_sc = await _gdelt.search_supply_chain_news(query, days=90)
-            if not isinstance(gdelt_sc, list):
-                gdelt_sc = []
-            gdelt_gm = await _gdelt.search_grey_market_signals(query, days=180)
-            if not isinstance(gdelt_gm, list):
-                gdelt_gm = []
+            # The semaphore in gdelt.py caps global concurrency at 2, so these
+            # two calls can run in parallel. We stagger the second by 1 s to
+            # avoid sending both requests to GDELT at the exact same millisecond,
+            # which previously triggered 429s.
+            async def _gdelt_sc() -> list:
+                return await _gdelt.search_supply_chain_news(query, days=90)
+
+            async def _gdelt_gm() -> list:
+                await asyncio.sleep(1.0)
+                return await _gdelt.search_grey_market_signals(query, days=180)
+
+            _gdelt_results = await asyncio.gather(_gdelt_sc(), _gdelt_gm(), return_exceptions=True)
+            gdelt_sc = _gdelt_results[0] if isinstance(_gdelt_results[0], list) else []
+            gdelt_gm = _gdelt_results[1] if isinstance(_gdelt_results[1], list) else []
 
             gdelt_contexts: list[str] = []
             gdelt_sources: list[dict[str, Any]] = []
