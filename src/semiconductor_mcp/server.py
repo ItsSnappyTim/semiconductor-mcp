@@ -11,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from .config import (
-    COMTRADE_API_KEY, ENABLE_EVAL, ITA_API_KEY,
+    COMTRADE_API_KEY, ENABLE_EVAL, ITA_API_KEY, OPENSANCTIONS_API_KEY,
     MCP_AUTH_TOKEN, PORT, WHITEPAPER_DIR, validate_config,
 )
 from .db import init_db, insert_whitepaper, list_all, search_fts
@@ -226,7 +226,7 @@ async def lookup_fab_component(query: str) -> str:
                 top_supplier = suppliers[0].get("name", "")
                 if top_supplier:
                     try:
-                        screen = await _opensanctions.screen_entity(top_supplier)
+                        screen = await _opensanctions.screen_entity(top_supplier, OPENSANCTIONS_API_KEY)
                         enriched["supplier_sanctions_check"] = {
                             "screened_entity": top_supplier,
                             "risk": screen.get("risk"),
@@ -315,7 +315,7 @@ async def screen_entity(entity_name: str, country: str = "") -> str:
     Use before engaging any unfamiliar supplier, especially for controlled
     semiconductor equipment, materials, or technology.
     """
-    opensanctions_future = _opensanctions.screen_entity(entity_name)
+    opensanctions_future = _opensanctions.screen_entity(entity_name, OPENSANCTIONS_API_KEY)
     bis_future = _bis_screening.screen_entity(entity_name, ITA_API_KEY)
 
     os_result, bis_result = await asyncio.gather(
@@ -752,7 +752,7 @@ if ENABLE_EVAL:
                     entity_coros: list = []
                     for entity in entities[:2]:
                         entity_coros.append(_edgar.search_filings(entity, query[:50]))
-                        entity_coros.append(_opensanctions.screen_entity(entity))
+                        entity_coros.append(_opensanctions.screen_entity(entity, OPENSANCTIONS_API_KEY))
                     entity_raw = await asyncio.gather(*entity_coros, return_exceptions=True)
 
                     for i, entity in enumerate(entities[:2]):

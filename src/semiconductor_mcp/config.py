@@ -25,6 +25,9 @@ COMTRADE_API_KEY = os.environ.get("COMTRADE_API_KEY", "")
 # Optional: ITA Consolidated Screening List (free key at developer.trade.gov)
 ITA_API_KEY = os.environ.get("ITA_API_KEY", "")
 
+# Optional: OpenSanctions API key (free tier at opensanctions.org/api/)
+OPENSANCTIONS_API_KEY = os.environ.get("OPENSANCTIONS_API_KEY", "")
+
 
 def validate_config() -> None:
     if not NEWSAPI_KEY:

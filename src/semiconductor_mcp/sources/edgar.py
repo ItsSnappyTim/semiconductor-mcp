@@ -10,8 +10,16 @@ from typing import Any
 import httpx
 
 _EFTS_BASE = "https://efts.sec.gov/LATEST/search-index"
-_FILING_BASE = "https://www.sec.gov/Archives"
 _TIMEOUT = 20
+# SEC EDGAR requires a descriptive User-Agent or returns 403
+_HEADERS = {"User-Agent": "semiconductor-mcp-research/1.0 research@semiconductor-mcp.app"}
+
+
+def _filing_url(cik: str, adsh: str) -> str:
+    """Build EDGAR filing index URL from CIK and accession number."""
+    cik_int = str(int(cik.lstrip("0") or "0"))
+    adsh_clean = adsh.replace("-", "")
+    return f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{adsh_clean}/"
 
 
 async def search_filings(
@@ -23,20 +31,17 @@ async def search_filings(
 ) -> list[dict[str, Any]]:
     """Search EDGAR full-text for supply chain disclosures in SEC filings.
 
-    Returns up to max_results filing excerpts matching the company + topic.
+    Returns up to max_results filing records matching the company + topic.
     """
-    # EDGAR EFTS uses the _source endpoint for full-text search
     params = {
         "q": f'"{company}" "{topic}"',
         "forms": forms,
         "dateRange": "custom",
         "startdt": start_date,
-        "hits.hits.total.value": 1,
-        "_source": "period_of_report,file_date,form_type,display_names,file_num,period_of_report",
     }
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(_EFTS_BASE, params=params)
+            resp = await client.get(_EFTS_BASE, params=params, headers=_HEADERS)
             resp.raise_for_status()
         data = resp.json()
     except httpx.TimeoutException:
@@ -50,19 +55,20 @@ async def search_filings(
     results = []
     for hit in hits[:max_results]:
         src = hit.get("_source", {})
-        entity_names = src.get("display_names", [])
-        company_name = entity_names[0].get("name", "") if entity_names else ""
+        display_names = src.get("display_names", [])
+        company_name = display_names[0] if display_names else company
+        ciks = src.get("ciks", [""])
+        adsh = src.get("adsh", "")
         results.append({
-            "company": company_name,
-            "form_type": src.get("form_type", ""),
+            "company_name": company_name,
+            "form_type": src.get("form", src.get("file_type", "")),
             "filed_at": src.get("file_date", ""),
-            "period": src.get("period_of_report", ""),
-            "filing_url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&filenum={src.get('file_num', '')}&type={src.get('form_type', '')}&dateb=&owner=include&count=40",
-            "excerpt": hit.get("highlight", {}).get("file_date", [""])[0] if hit.get("highlight") else "",
+            "period": src.get("period_ending", ""),
+            "file_url": _filing_url(ciks[0], adsh) if ciks and adsh else "",
+            "excerpt": "",  # EFTS index endpoint does not return text excerpts
         })
 
-    if not results and not hits:
-        # Fallback: return a search URL the user can follow
+    if not results:
         search_url = (
             f"https://efts.sec.gov/LATEST/search-index?"
             f"q=%22{company.replace(' ', '+')}%22+%22{topic.replace(' ', '+')}%22"
@@ -71,7 +77,7 @@ async def search_filings(
         return [{
             "company": company,
             "topic": topic,
-            "result": "No direct API matches; follow URL to search EDGAR",
+            "result": "No matches found",
             "search_url": search_url,
         }]
 
