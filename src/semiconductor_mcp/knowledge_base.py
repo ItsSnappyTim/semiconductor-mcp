@@ -27,6 +27,7 @@ PROCESS_STEPS: dict[str, dict] = {
         "component_ids": [
             "silicon_wafer_300mm", "argon_gas_bulk", "hf_acid_electronic",
             "cmp_slurry", "cmp_polishing_pad", "cmp_system",
+            "highpurity_filters_pou", "upw_system_components", "ipa_electronic_grade",
         ],
     },
     "thermal_oxidation": {
@@ -37,7 +38,7 @@ PROCESS_STEPS: dict[str, dict] = {
             "gate dielectrics (legacy nodes), field isolation, or hardmask."
         ),
         "node_applicability": ["mature nodes (>28nm)"],
-        "component_ids": ["argon_gas_bulk", "cvd_system"],
+        "component_ids": ["argon_gas_bulk", "cvd_system", "quartz_process_components"],
     },
     "lithography_duv": {
         "name": "DUV Lithography (ArF Immersion, 193nm)",
@@ -51,6 +52,7 @@ PROCESS_STEPS: dict[str, dict] = {
         "component_ids": [
             "duv_scanner_arf", "duv_photoresist_arf", "photomask_euv",
             "neon_gas", "krypton_gas", "argon_gas_bulk",
+            "barc_coating", "duv_pellicle", "hmds_adhesion_promoter",
         ],
     },
     "lithography_euv": {
@@ -79,6 +81,9 @@ PROCESS_STEPS: dict[str, dict] = {
         "node_applicability": ["all nodes"],
         "component_ids": [
             "etch_system_advanced", "specialty_etch_gases", "argon_gas_bulk",
+            "electrostatic_chuck", "ceramic_chamber_components",
+            "mfc_mass_flow_controller", "perfluoroelastomer_seals",
+            "gas_abatement_systems",
         ],
     },
     "etch_wet": {
@@ -91,7 +96,11 @@ PROCESS_STEPS: dict[str, dict] = {
             "control throughout the process."
         ),
         "node_applicability": ["all nodes"],
-        "component_ids": ["hf_acid_electronic", "argon_gas_bulk"],
+        "component_ids": [
+            "hf_acid_electronic", "argon_gas_bulk",
+            "buffered_hf_boe", "tmah_developer",
+            "highpurity_filters_pou", "upw_system_components", "ipa_electronic_grade",
+        ],
     },
     "cvd_deposition": {
         "name": "Chemical Vapor Deposition (CVD / PECVD / SACVD)",
@@ -105,7 +114,9 @@ PROCESS_STEPS: dict[str, dict] = {
         "node_applicability": ["all nodes"],
         "component_ids": [
             "cvd_system", "ald_precursors_metal", "specialty_etch_gases",
-            "argon_gas_bulk",
+            "argon_gas_bulk", "teos_cvd_precursor", "silane_sih4",
+            "mfc_mass_flow_controller", "specialty_gas_purifiers",
+            "ceramic_chamber_components", "gas_abatement_systems",
         ],
     },
     "ald": {
@@ -120,7 +131,7 @@ PROCESS_STEPS: dict[str, dict] = {
         "node_applicability": ["<28nm"],
         "component_ids": [
             "ald_system", "ald_precursors_metal", "hafnium", "tantalum",
-            "argon_gas_bulk",
+            "argon_gas_bulk", "mfc_mass_flow_controller", "specialty_gas_purifiers",
         ],
     },
     "pvd_sputtering": {
@@ -134,6 +145,7 @@ PROCESS_STEPS: dict[str, dict] = {
         "node_applicability": ["all nodes"],
         "component_ids": [
             "pvd_system", "tantalum", "cobalt", "ruthenium", "argon_gas_bulk",
+            "electrostatic_chuck", "ceramic_chamber_components",
         ],
     },
     "ion_implant": {
@@ -172,7 +184,8 @@ PROCESS_STEPS: dict[str, dict] = {
         "node_applicability": ["all nodes"],
         "component_ids": [
             "cmp_system", "cmp_slurry", "cmp_polishing_pad",
-            "hf_acid_electronic",
+            "hf_acid_electronic", "cmp_conditioner_disc",
+            "highpurity_filters_pou", "upw_system_components",
         ],
     },
     "metallization_cu": {
@@ -214,6 +227,19 @@ PROCESS_STEPS: dict[str, dict] = {
         ),
         "node_applicability": ["all nodes"],
         "component_ids": ["metrology_system"],
+    },
+    "wafer_dicing": {
+        "name": "Wafer Dicing & Singulation",
+        "category": "back_end",
+        "description": (
+            "Mechanical or laser dicing to separate individual dies from the "
+            "finished wafer. Blade dicing uses diamond or CBN blades at high "
+            "rotational speed with DI water cooling. Stealth dicing (laser) used "
+            "for thin wafers and hard materials. Yield impact is significant — "
+            "chipping and cracking at die edges is a primary failure mode."
+        ),
+        "node_applicability": ["all nodes"],
+        "component_ids": ["wafer_dicing_blades"],
     },
 }
 
@@ -1609,6 +1635,1036 @@ COMPONENTS: dict[str, dict] = {
         "critical_mineral": False,
         "geographic_concentration": "Japan ~70%, Germany ~30% (glass)",
         "hs_codes": ["3707.90", "9001.90"],
+    },
+
+    # -----------------------------------------------------------------------
+    # Process-Critical Consumables
+    # -----------------------------------------------------------------------
+
+    "highpurity_filters_pou": {
+        "name": "High-Purity Point-of-Use Filters",
+        "aliases": ["POU filter", "point of use filter", "process filter", "in-line filter", "membrane filter", "PTFE filter", "UPW filter", "photoresist filter", "chemical filter"],
+        "category": "process_consumable",
+        "description": (
+            "Membrane filtration devices installed at the point of chemical or "
+            "gas delivery to remove particulates, gel particles, and microbial "
+            "contamination immediately before contact with the wafer. Used across "
+            "virtually every wet process: photoresist delivery, CMP slurry supply, "
+            "UPW polishing loops, chemical dispensing, and immersion lithography "
+            "water systems. Filter membranes are PTFE, PVDF, UPE, or nylon "
+            "depending on chemical compatibility. Pore sizes range from 0.003µm "
+            "(ultrafiltration) to 0.1µm (standard). A single particle breach can "
+            "kill an entire wafer lot — filter integrity is yield-critical."
+        ),
+        "used_in_steps": ["wafer_prep", "etch_wet", "lithography_duv", "lithography_euv", "cvd_deposition", "cmp"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Entegris", "country": "USA", "market_share": "~50%",
+             "notes": "Mykrolis brand; dominant in advanced node photoresist and chemical filtration"},
+            {"name": "Pall Corporation (Danaher)", "country": "USA", "market_share": "~25%",
+             "notes": "Ultipor and Supor membrane series; strong in UPW and bulk chemical"},
+            {"name": "Parker Hannifin", "country": "USA", "market_share": "~12%",
+             "notes": "domnick hunter semiconductor series"},
+            {"name": "Porvair Filtration", "country": "UK", "market_share": "~5%",
+             "notes": "Specialist in high-purity gas and liquid filtration"},
+        ],
+        "supply_risks": [
+            "Entegris concentration — also supplies FOUPs, specialty chemicals, and gas purifiers; single-company exposure",
+            "PTFE and PVDF membrane polymers subject to EU PFAS regulations (2025+ restrictions could affect fluoropolymer membranes)",
+            "Counterfeit filters documented in secondary market — yield impact from fake filters is catastrophic and often undetected until pattern defects appear",
+            "Qualification of new filter suppliers requires extensive testing (particle generation, extractables, chemical compatibility) — 6–12 months minimum",
+            "Specialty filter formats (e.g., dispense point filters for EUV photoresist) are application-specific with very limited supplier alternatives",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "Standard filtration products are not export controlled. Advanced versions for EUV photoresist may attract scrutiny as part of broader EUV process controls.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "medium",
+        "grey_market_detail": (
+            "Counterfeit high-purity filters are a documented problem. Fake filters "
+            "with correct external appearance but substandard membranes have been found "
+            "in grey market supply chains. The defect is undetectable without destructive "
+            "testing and may only manifest as yield loss. Procurement exclusively through "
+            "authorized distributors is critical."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA dominant (Entegris, Pall, Parker); UK secondary",
+        "hs_codes": ["8421.29", "8421.39"],
+    },
+
+    "electrostatic_chuck": {
+        "name": "Electrostatic Chuck (ESC)",
+        "aliases": ["ESC", "e-chuck", "wafer chuck", "Coulomb chuck", "Johnsen-Rahbek chuck", "ceramic chuck"],
+        "category": "process_consumable",
+        "description": (
+            "A ceramic or polymer device that holds the wafer flat against the "
+            "process chamber pedestal using electrostatic force during plasma "
+            "processing, PVD, and CVD. Provides precise wafer temperature control "
+            "through a helium back-side cooling channel. ESC material and design "
+            "is specific to each tool model and process chemistry — a given ESC "
+            "works in exactly one tool configuration. Replace frequency: "
+            "approximately every 500,000–1,000,000 wafer passes depending on "
+            "process aggressiveness. Failure causes wafer drop, contamination, "
+            "or particle events. Critical for uniformity and yield."
+        ),
+        "used_in_steps": ["etch_dry", "pvd_sputtering", "cvd_deposition", "ald"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Sumitomo Osaka Cement", "country": "Japan", "market_share": "~30%",
+             "notes": "AlN and Al2O3 ESC; major OEM supplier to Lam and Applied Materials"},
+            {"name": "Kyocera", "country": "Japan", "market_share": "~25%",
+             "notes": "High-purity alumina and aluminum nitride ESCs"},
+            {"name": "NGK Insulators", "country": "Japan", "market_share": "~15%",
+             "notes": "Advanced ceramic ESC and heater components"},
+            {"name": "CoorsTek", "country": "USA", "market_share": "~15%",
+             "notes": "Alumina and AlN ceramic ESC for US OEMs"},
+            {"name": "Applied Materials / Lam Research", "country": "USA", "market_share": "~15%",
+             "notes": "Captive supply integrated into tool; sold as spare parts"},
+        ],
+        "supply_risks": [
+            "Japan concentration (~70%) for ceramic ESC components",
+            "Long lead times: 12–20 weeks for custom configurations; standard parts 6–10 weeks",
+            "Tool-specific designs mean no interchangeability — an ESC for a Lam Kiyo will not fit an Applied Sym3",
+            "AlN (aluminum nitride) ESCs require high-purity aluminum nitride powder with limited global supply",
+            "Refurbished ESCs from decommissioned tools circulate in grey market; condition verification difficult",
+        ],
+        "export_controls": {
+            "status": "partial",
+            "detail": "Advanced ESCs designed for sub-10nm processes may fall under EAR 3B991 or 3B001 controls as components of controlled semiconductor manufacturing equipment. Japan has tightened export controls on advanced semiconductor components since 2023.",
+            "eccn": "3B991",
+        },
+        "grey_market_risk": "medium",
+        "grey_market_detail": (
+            "Used and refurbished ESCs from decommissioned fabs or tools are widely "
+            "traded. Condition is difficult to assess — internal delamination and "
+            "helium leak paths are not visible externally. Installing a degraded ESC "
+            "causes temperature non-uniformity, yield loss, and potential wafer "
+            "breakage. Particularly active grey market from DRAM fab consolidations."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Japan ~70% (Sumitomo, Kyocera, NGK); USA ~30%",
+        "hs_codes": ["8543.70", "6909.19"],
+    },
+
+    "mfc_mass_flow_controller": {
+        "name": "Mass Flow Controller (MFC)",
+        "aliases": ["MFC", "mass flow controller", "gas flow controller", "thermal MFC", "Coriolis MFC", "flow controller"],
+        "category": "process_consumable",
+        "description": (
+            "Precision instruments that measure and control the volumetric or mass "
+            "flow rate of process gases into deposition, etch, and implant chambers. "
+            "Thermal MFCs use a heated capillary sensor; Coriolis MFCs measure mass "
+            "directly for corrosive or high-flow applications. Accuracy requirements "
+            "for ALD are ±0.5% of setpoint — drift causes film thickness non-uniformity. "
+            "Each process chamber uses 4–20 MFCs. A single miscalibrated MFC can cause "
+            "systematic yield loss across an entire product line before detection."
+        ),
+        "used_in_steps": ["cvd_deposition", "ald", "etch_dry", "pvd_sputtering", "ion_implant"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "MKS Instruments", "country": "USA", "market_share": "~35%",
+             "notes": "Type 1179 and Cirrus series; dominant in etch and CVD applications"},
+            {"name": "Brooks Instrument (Emerson)", "country": "USA", "market_share": "~20%",
+             "notes": "GF series; strong in corrosive gas applications"},
+            {"name": "Horiba", "country": "Japan", "market_share": "~20%",
+             "notes": "SEC-Z series; dominant in Japanese and Korean fabs"},
+            {"name": "Fujikin", "country": "Japan", "market_share": "~12%",
+             "notes": "High-purity gas delivery components and MFCs"},
+            {"name": "Hitachi Metals / Proterial", "country": "Japan", "market_share": "~8%",
+             "notes": "MFC and gas control components"},
+        ],
+        "supply_risks": [
+            "MKS Instruments dominance — also supplies pressure controllers, RF power, and gas analysis; broad single-company exposure",
+            "Semiconductor-grade MFCs require cleanroom assembly with particle-free wetted surfaces — cannot substitute industrial MFCs",
+            "Calibration gas standards required for re-calibration; calibration drift increases with process gas exposure",
+            "Lead times: 8–20 weeks for standard models; 26+ weeks for specialty configurations (H2, F2, HCl service)",
+            "Advanced MFCs for sub-14nm ALD processes may be subject to EAR controls as part of controlled equipment",
+        ],
+        "export_controls": {
+            "status": "partial",
+            "detail": "MFCs with specifications meeting 3B991 thresholds (for use in deposition of <45nm films) may be controlled under EAR. Japan has included precision gas delivery equipment in its 2023 export control expansion.",
+            "eccn": "3B991",
+        },
+        "grey_market_risk": "medium",
+        "grey_market_detail": (
+            "Used MFCs from decommissioned tools are widely traded. Calibration "
+            "state is unknown and drift is common. Contaminated MFCs (from F2, Cl2, "
+            "or HBr service) can release residual process gas into new applications. "
+            "Counterfeit calibration stickers have been documented on used units "
+            "sold as 'factory calibrated.'"
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA ~55% (MKS, Brooks); Japan ~40% (Horiba, Fujikin, Proterial)",
+        "hs_codes": ["9026.20", "9032.89"],
+    },
+
+    "foup_wafer_carrier": {
+        "name": "FOUP (Front Opening Unified Pod)",
+        "aliases": ["FOUP", "front opening unified pod", "wafer carrier", "wafer pod", "300mm carrier", "wafer transport container"],
+        "category": "process_consumable",
+        "description": (
+            "Sealed polycarbonate or PEEK containers that transport and store 300mm "
+            "wafers between process steps in the fab environment. FOUPs maintain an "
+            "ultra-low particle and humidity environment around the wafer stack. "
+            "Each FOUP holds 25 wafers in precision slots. A 300mm fab requires "
+            "thousands of FOUPs in constant circulation through automated material "
+            "handling systems (AMHS). FOUP outgassing, cleanliness, and mechanical "
+            "integrity directly affect wafer contamination and yield. Damaged or "
+            "degraded FOUPs are a significant source of defects."
+        ),
+        "used_in_steps": ["wafer_prep", "lithography_duv", "lithography_euv", "etch_dry", "etch_wet", "cvd_deposition", "ald", "cmp", "metallization_cu", "inspection_metrology"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Entegris", "country": "USA", "market_share": "~60%",
+             "notes": "300mm FOUP dominant supplier; also supplies chemical management systems"},
+            {"name": "Miraial", "country": "Japan", "market_share": "~20%",
+             "notes": "Strong in Japanese fabs; precision molded polymer FOUPs"},
+            {"name": "Shin-Etsu Polymer", "country": "Japan", "market_share": "~12%",
+             "notes": "Semiconductor packaging and FOUP components"},
+            {"name": "Gudeng Precision", "country": "Taiwan", "market_share": "~8%",
+             "notes": "FOUP and reticle pod supplier; growing with TSMC expansion"},
+        ],
+        "supply_risks": [
+            "Entegris concentration — dominates both FOUP and many chemical delivery products",
+            "Ultra-low outgassing polymer resins (polycarbonate, PEEK) have limited qualified suppliers",
+            "FOUP door seal degradation causes contamination — replacement seals require qualification",
+            "Taiwan fab expansion driving Gudeng capacity constraints",
+            "AMHS compatibility — FOUPs are qualified to specific AMHS track specifications; cannot mix standards",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "FOUPs are generally not export controlled as standalone items. Advanced FOUPs designed specifically for EUV reticle transport may attract scrutiny.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Grey market FOUP activity is limited — most are purchased through authorized channels "
+            "due to AMHS qualification requirements. Used FOUPs from decommissioned fabs are "
+            "sometimes refurbished, but contamination history makes reuse in leading-edge fabs risky."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA (Entegris) ~60%; Japan ~32%; Taiwan ~8%",
+        "hs_codes": ["3923.10", "3926.90"],
+    },
+
+    "ceramic_chamber_components": {
+        "name": "Ceramic Process Chamber Components",
+        "aliases": ["chamber liner", "focus ring", "edge ring", "ceramic ring", "yttria coating", "alumina liner", "SiC ring", "quartz ring", "AlN component", "Y2O3 component"],
+        "category": "process_consumable",
+        "description": (
+            "Precision ceramic parts that line plasma etch and CVD chamber interiors: "
+            "liners, focus rings, edge rings, upper/lower electrodes, gas distribution "
+            "plates (showerheads), and confinement rings. Materials include alumina "
+            "(Al2O3), yttria (Y2O3), aluminum nitride (AlN), and silicon carbide (SiC), "
+            "selected for plasma resistance and low particle generation. Yttria-coated "
+            "components are specifically required for fluorine-chemistry etch processes "
+            "at advanced nodes — Y2O3 resists HF and F-radical attack far better than "
+            "Al2O3. Replace frequency: every 100,000–500,000 RF hours depending on "
+            "process chemistry. Worn ceramics are the leading source of metallic "
+            "contamination in etch chambers."
+        ),
+        "used_in_steps": ["etch_dry", "cvd_deposition", "pvd_sputtering"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Kyocera", "country": "Japan", "market_share": "~30%",
+             "notes": "Alumina, AlN, and yttria components; major OEM to Lam and Applied Materials"},
+            {"name": "NGK Insulators", "country": "Japan", "market_share": "~20%",
+             "notes": "Large-format ceramics and yttria-coated components"},
+            {"name": "CoorsTek", "country": "USA", "market_share": "~20%",
+             "notes": "Alumina and SiC chamber components; strong with US OEMs"},
+            {"name": "Saint-Gobain", "country": "France", "market_share": "~15%",
+             "notes": "SiC and advanced ceramic components; CVD SiC coating capability"},
+            {"name": "Morgan Advanced Materials", "country": "UK", "market_share": "~10%",
+             "notes": "Specialty ceramics for extreme environments"},
+        ],
+        "supply_risks": [
+            "Japan concentration for yttria-coated components (~50%) — critical for advanced fluorine etch",
+            "Yttrium oxide (Y2O3) raw material sourced primarily from China and rare earth supply chains",
+            "Silicon carbide (SiC) ceramic production is energy-intensive and capacity-constrained",
+            "Component qualification to a specific tool/process chemistry takes 3–6 months — cannot switch suppliers quickly",
+            "Japan export controls (2023) now include some advanced ceramic components for semiconductor equipment",
+        ],
+        "export_controls": {
+            "status": "partial",
+            "detail": "Advanced etch-resistant ceramics (particularly yttria-coated components for sub-14nm etch) may fall under EAR 3B991 or Japan's expanded export controls as components of controlled semiconductor equipment.",
+            "eccn": "3B991",
+        },
+        "grey_market_risk": "medium",
+        "grey_market_detail": (
+            "Used ceramic components from decommissioned etch chambers are traded in secondary "
+            "markets. Wear state is difficult to assess visually — microcracking and yttria "
+            "coating depletion are only detectable by metrology. Worn ceramics installed as "
+            "'new' are a documented source of particle and metal contamination events."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Japan ~50% (Kyocera, NGK); USA ~20% (CoorsTek); Europe ~25%",
+        "hs_codes": ["6909.19", "6914.10"],
+    },
+
+    "quartz_process_components": {
+        "name": "Quartz Process Components",
+        "aliases": ["quartz tube", "quartz boat", "quartz paddle", "fused silica", "quartz furnace tube", "diffusion tube", "process tube", "quartz flange"],
+        "category": "process_consumable",
+        "description": (
+            "High-purity fused silica (synthetic quartz) components used in thermal "
+            "processing equipment: furnace tubes, wafer boats, paddles, baffles, "
+            "and flanges. Purity requirements are extreme — metallic contamination "
+            "at ppb levels causes doping anomalies and gate oxide defects. Used in "
+            "diffusion furnaces (thermal oxidation, LPCVD), RTP chambers, and "
+            "ion implant equipment. Operating temperatures up to 1200°C. Quartz "
+            "components are consumables that degrade through thermal cycling, "
+            "chemical attack, and devitrification (crystallization) — typically "
+            "replaced every 6–18 months depending on process conditions."
+        ),
+        "used_in_steps": ["thermal_oxidation", "cvd_deposition", "ion_implant", "rtp_anneal"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Heraeus Quarzglas", "country": "Germany", "market_share": "~35%",
+             "notes": "Synthetic fused silica leader; Suprasil grades for semiconductor"},
+            {"name": "Shin-Etsu Quartz", "country": "Japan", "market_share": "~30%",
+             "notes": "High-purity quartz glass for semiconductor process equipment"},
+            {"name": "Momentive (formerly GE Quartz)", "country": "USA", "market_share": "~20%",
+             "notes": "HPFS fused silica; optical and process grades"},
+            {"name": "Tosoh Quartz", "country": "Japan", "market_share": "~10%",
+             "notes": "Semiconductor process quartz components"},
+        ],
+        "supply_risks": [
+            "Spruce Pine, NC (USA) quartz sand mine — historically the primary global source of ultra-high-purity quartz for synthetic production; Hurricane Helene (Sept 2024) caused significant supply disruption",
+            "Germany and Japan dominate finished component production (~65% combined)",
+            "High-purity natural quartz feedstock concentrated in very few global locations (Spruce Pine, Norway, Australia)",
+            "Devitrification during use is irreversible — cannot be refurbished, only replaced",
+            "Specialty shapes (large-diameter tubes, complex geometries) require long lead times of 8–16 weeks",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "Quartz process components are generally not export controlled, though quartz optics for EUV are separately controlled.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Low grey market activity — quartz quality is deterministic and easily tested. "
+            "Counterfeit risk is low but substitution of lower-purity quartz for semiconductor-grade "
+            "has occurred and causes metallic contamination issues that are difficult to trace."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Germany ~35% (Heraeus); Japan ~40% (Shin-Etsu, Tosoh); USA ~20%",
+        "hs_codes": ["7020.00", "7001.00"],
+    },
+
+    "perfluoroelastomer_seals": {
+        "name": "Perfluoroelastomer (FFKM) Seals & O-Rings",
+        "aliases": ["Kalrez", "FFKM", "perfluoroelastomer", "FFKM O-ring", "Chemraz", "Perlast", "process seal", "chamber seal", "fluoroelastomer seal"],
+        "category": "process_consumable",
+        "description": (
+            "Perfluoroelastomer elastomeric seals used in semiconductor process "
+            "equipment wherever standard FKM (Viton) seals cannot survive aggressive "
+            "chemistry or plasma exposure. Required in virtually all etch, CVD, ALD, "
+            "and wet process tools. FFKM provides near-universal chemical resistance "
+            "including resistance to HF, plasma fluorine, chlorine, and strong "
+            "oxidizers. DuPont's Kalrez is the market-defining product — 'Kalrez' "
+            "is often used generically. Seals are consumable items replaced during "
+            "preventive maintenance cycles (typically every 3–6 months per chamber). "
+            "A failed seal causes equipment downtime, vacuum loss, or chemical leak — "
+            "a safety and yield incident."
+        ),
+        "used_in_steps": ["etch_dry", "cvd_deposition", "ald", "pvd_sputtering", "etch_wet"],
+        "availability": "single_source",
+        "key_suppliers": [
+            {"name": "DuPont (Kalrez)", "country": "USA", "market_share": "~60%",
+             "notes": "Kalrez is the de facto standard for aggressive semiconductor chemistries; some grades have no qualified alternative"},
+            {"name": "Parker Hannifin (Chemraz)", "country": "USA", "market_share": "~20%",
+             "notes": "Alternative to Kalrez in some applications; qualified in many tool PM kits"},
+            {"name": "Greene Tweed (Chemraz/Isolast)", "country": "USA", "market_share": "~10%",
+             "notes": "FFKM for extreme chemical environments"},
+            {"name": "Trelleborg (Isolast)", "country": "Sweden", "market_share": "~8%",
+             "notes": "European alternative; growing semiconductor qualification"},
+        ],
+        "supply_risks": [
+            "DuPont near-monopoly on Kalrez for highest-performance applications (plasma etch at <7nm) — alternatives are not qualified in many tool configurations",
+            "PFAS regulatory pressure: EU PFAS restrictions (2025+ phase-in) could restrict fluoropolymer production including FFKM monomers",
+            "Perfluorinated raw material (TFE, PMVE) production concentrated in a small number of chemical plants globally",
+            "Counterfeit Kalrez is well-documented — fake seals that look identical to genuine seals cause equipment damage when they fail in aggressive chemistry",
+            "Custom sizes and durometer specifications require long qualification cycles — cannot switch suppliers without process re-qualification",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "FFKM seals are not directly export controlled, though they are components of controlled semiconductor equipment.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "high",
+        "grey_market_detail": (
+            "Counterfeit Kalrez is one of the most documented counterfeiting problems in "
+            "semiconductor consumables. Fake seals with correct part numbers and packaging "
+            "have been found through authorized-looking distributors. Seal failure in "
+            "plasma or corrosive chemistry environments causes immediate equipment damage, "
+            "safety incidents, and potential chemical exposure. Procurement exclusively "
+            "through DuPont-authorized channels is strongly recommended. Authentication "
+            "codes on packaging should be verified."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA dominant (DuPont, Parker, Greene Tweed); Sweden (Trelleborg)",
+        "hs_codes": ["4016.93", "4016.99"],
+    },
+
+    "cmp_conditioner_disc": {
+        "name": "CMP Pad Conditioner Disc",
+        "aliases": ["conditioner disc", "diamond disc", "CMP conditioner", "pad conditioner", "dressing disc", "diamond conditioner"],
+        "category": "process_consumable",
+        "description": (
+            "Diamond-studded discs that continuously condition (dress) CMP polishing "
+            "pads during wafer polishing to maintain pad surface roughness and slurry "
+            "transport channels. Without conditioning, CMP pads glaze and lose removal "
+            "rate, causing within-wafer non-uniformity. Diamonds are embedded in a "
+            "brazed or electroplated nickel matrix on a stainless steel disc. Diamond "
+            "size (typically 100–400 µm grit), density, and protrusion height are "
+            "precisely engineered. Disc lifetime: approximately 500–2,000 wafer passes "
+            "depending on process. Each CMP tool uses 1–3 conditioning discs simultaneously."
+        ),
+        "used_in_steps": ["cmp"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "3M", "country": "USA", "market_share": "~30%",
+             "notes": "A165 and A2000 series; dominant in logic and leading-edge memory CMP"},
+            {"name": "Kinik Company", "country": "Taiwan", "market_share": "~25%",
+             "notes": "Strong in memory fabs; competitive pricing; TSMC qualified"},
+            {"name": "Saesol Diamond Industry", "country": "South Korea", "market_share": "~20%",
+             "notes": "Growing share in Korean memory fabs (Samsung, SK Hynix)"},
+            {"name": "Abrasive Technology", "country": "USA", "market_share": "~12%",
+             "notes": "Custom and specialty conditioner discs"},
+            {"name": "Morgan Advanced Materials", "country": "UK", "market_share": "~8%",
+             "notes": "PCD and CVD diamond conditioners for specialty applications"},
+        ],
+        "supply_risks": [
+            "Synthetic diamond quality and supply — industrial diamond production concentrated in China (~80% of global synthetic diamond)",
+            "Diamond-metal brazing and electroplating expertise concentrated in a small number of facilities",
+            "Taiwan (Kinik) geopolitical risk — significant share of TSMC-qualified supply",
+            "Application-specific qualification: a conditioner disc qualified for oxide CMP may not be qualified for copper or STI CMP",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "CMP conditioner discs are not export controlled.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Low grey market risk — counterfeit conditioner discs are uncommon. "
+            "Used discs have limited resale value as wear state is apparent. "
+            "Main risk is substitution of unqualified (but genuine) discs from "
+            "non-qualified suppliers into critical process applications."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA ~42% (3M, Abrasive Technology); Taiwan ~25% (Kinik); South Korea ~20%",
+        "hs_codes": ["6804.21", "8202.99"],
+    },
+
+    # -----------------------------------------------------------------------
+    # Wet Chemistry & Chemical Delivery
+    # -----------------------------------------------------------------------
+
+    "tmah_developer": {
+        "name": "TMAH (Tetramethylammonium Hydroxide) Developer",
+        "aliases": ["TMAH", "tetramethylammonium hydroxide", "photoresist developer", "2.38% TMAH", "positive resist developer", "Si etchant TMAH"],
+        "category": "wet_chemistry",
+        "description": (
+            "The universal developer for positive-tone photoresists in DUV and EUV "
+            "lithography. A 2.38% aqueous TMAH solution selectively dissolves "
+            "exposed photoresist. Also used as an anisotropic silicon etchant for "
+            "MEMS and sensor fabrication. Semiconductor-grade TMAH requires metallic "
+            "impurities below 1 ppb — a single sodium or potassium ion can cause "
+            "threshold voltage shifts in transistors. TMAH is a systemic toxin with "
+            "no antidote — dermal absorption is lethal, requiring strict handling protocols."
+        ),
+        "used_in_steps": ["lithography_duv", "lithography_euv", "etch_wet"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "SACHEM Inc.", "country": "USA", "market_share": "~30%",
+             "notes": "Leading US supplier of semiconductor-grade TMAH; strong in North American fabs"},
+            {"name": "Chang Chun Group", "country": "Taiwan", "market_share": "~25%",
+             "notes": "Major Asian supplier; qualified at TSMC and UMC"},
+            {"name": "Stella Chemifa", "country": "Japan", "market_share": "~20%",
+             "notes": "High-purity electronic chemicals including TMAH"},
+            {"name": "Tama Chemicals", "country": "Japan", "market_share": "~15%",
+             "notes": "Specialty electronic chemicals"},
+        ],
+        "supply_risks": [
+            "Taiwan concentration (Chang Chun ~25%) — geopolitical risk for Asian fab supply",
+            "TMAH toxicity creates transport and storage regulatory requirements that limit supplier flexibility",
+            "Semiconductor-grade purity specification (<1 ppb metals) narrows qualified supplier pool significantly",
+            "Increasing regulatory scrutiny of TMAH as an acutely toxic substance may restrict production in some jurisdictions",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "TMAH is not directly export controlled under EAR, though it is subject to hazardous materials regulations. Some jurisdictions restrict import due to toxicity classification.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "TMAH grey market activity is minimal due to toxicity — informal trade is hazardous "
+            "and heavily regulated. The main risk is purity substitution: industrial-grade TMAH "
+            "sold as semiconductor grade, causing metal contamination that is difficult to trace."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA ~30%; Taiwan ~25%; Japan ~35%",
+        "hs_codes": ["2923.90"],
+    },
+
+    "buffered_hf_boe": {
+        "name": "Buffered Oxide Etch (BOE / BHF)",
+        "aliases": ["BOE", "BHF", "buffered HF", "buffered oxide etch", "ammonium fluoride buffer", "6:1 BOE", "10:1 BOE", "oxide etchant"],
+        "category": "wet_chemistry",
+        "description": (
+            "An ammonium fluoride (NH4F) buffered hydrofluoric acid solution used "
+            "for controlled, uniform etching of silicon dioxide (SiO2) and silicon "
+            "nitride (Si3N4). Unlike anhydrous or concentrated HF, BOE provides "
+            "stable, reproducible etch rates and better selectivity to silicon. "
+            "Common concentrations: 6:1 (6 parts 40% NH4F : 1 part 49% HF) for "
+            "standard oxide etch; 10:1 for delicate structures. Used in gate oxide "
+            "preparation, contact opening, MEMS release, and surface preparation. "
+            "Purity requirements are extreme — metallic contamination causes "
+            "gate oxide integrity failures."
+        ),
+        "used_in_steps": ["etch_wet", "wafer_prep"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Stella Chemifa", "country": "Japan", "market_share": "~35%",
+             "notes": "Leading supplier of high-purity fluorine chemistry including BOE; critical Japan concentration"},
+            {"name": "Honeywell (Specialty Chemicals)", "country": "USA", "market_share": "~20%",
+             "notes": "Electronic-grade BOE for North American fabs"},
+            {"name": "Solvay", "country": "Belgium", "market_share": "~18%",
+             "notes": "Specialty fluorine chemistry; European fab supply"},
+            {"name": "Air Products", "country": "USA", "market_share": "~15%",
+             "notes": "Electronic specialty gases and chemicals"},
+        ],
+        "supply_risks": [
+            "Stella Chemifa Japan concentration — HF and fluorine chemistry supply heavily Japan-dependent",
+            "Anhydrous HF feedstock — global fluorite (CaF2) mining concentrated in China, Mexico, South Africa",
+            "BOE is acutely hazardous (HF burns have high lethality) — strict transport and handling requirements",
+            "Japan export controls (2023) include some high-purity fluorine chemistry",
+        ],
+        "export_controls": {
+            "status": "partial",
+            "detail": "HF and fluorine compounds have dual-use classification in some jurisdictions. Japan export controls (2023) include certain ultra-high-purity fluorine chemistry products. Not directly controlled under US EAR for standard semiconductor use.",
+            "eccn": "EAR99 (standard grades)",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "BOE grey market activity is low — the extreme hazard limits informal trade. "
+            "Purity substitution risk exists: lower-grade material sold as semiconductor-grade "
+            "causes defects that may not be immediately traceable to the chemical source."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Japan ~35% (Stella Chemifa); USA ~35%; Europe ~18%",
+        "hs_codes": ["2811.11", "2827.11"],
+    },
+
+    "ipa_electronic_grade": {
+        "name": "Electronic Grade Isopropyl Alcohol (IPA)",
+        "aliases": ["IPA", "isopropyl alcohol", "2-propanol", "electronic IPA", "semiconductor IPA", "wafer rinse IPA", "Marangoni IPA"],
+        "category": "wet_chemistry",
+        "description": (
+            "Ultra-high-purity isopropyl alcohol (IPA) used extensively in wafer "
+            "cleaning, drying (Marangoni drying), photoresist thinning, and equipment "
+            "cleaning throughout the fab. Electronic grade requires metallic impurities "
+            "below 1 ppb and particulate counts below 10 particles/mL. The Marangoni "
+            "drying technique uses IPA vapor to create a surface tension gradient that "
+            "removes water without mechanical contact, eliminating watermarks. "
+            "IPA is one of the highest-volume liquid chemicals in a semiconductor fab — "
+            "a 300mm fab consumes thousands of liters daily."
+        ),
+        "used_in_steps": ["wafer_prep", "etch_wet", "lithography_duv"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Tokuyama Corporation", "country": "Japan", "market_share": "~30%",
+             "notes": "Largest electronic-grade IPA supplier globally; dominant in Asian fabs"},
+            {"name": "Mitsui Chemicals", "country": "Japan", "market_share": "~20%",
+             "notes": "Electronic specialty chemicals including IPA"},
+            {"name": "LG Chem", "country": "South Korea", "market_share": "~15%",
+             "notes": "Growing semiconductor chemical supply; IPA for Korean fabs"},
+            {"name": "KMG Chemicals (CMC Materials)", "country": "USA", "market_share": "~15%",
+             "notes": "Electronic grade IPA for North American fab supply"},
+            {"name": "Dow Chemical", "country": "USA", "market_share": "~12%",
+             "notes": "Broad chemical supply including electronic grade IPA"},
+        ],
+        "supply_risks": [
+            "COVID-19 (2020) caused global IPA shortage — semiconductor fabs competed with pharmaceutical and sanitizer demand; supply disrupted for 6–12 months",
+            "Japan dominance (~50%) for highest purity grades used in leading-edge processes",
+            "IPA is a commodity at industrial grade but semiconductor grade has very limited qualified suppliers",
+            "High consumption volume means storage and logistics infrastructure must be substantial",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "IPA is not export controlled. Subject to standard flammable liquid transport regulations.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "IPA grey market risk is low but purity substitution is a concern — "
+            "industrial-grade IPA sold as semiconductor grade. The main indicator "
+            "is metallic contamination causing device yield loss, which is "
+            "difficult to source to a specific chemical without full supply chain audit."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Japan ~50% (Tokuyama, Mitsui); South Korea ~15%; USA ~27%",
+        "hs_codes": ["2905.12"],
+    },
+
+    "upw_system_components": {
+        "name": "Ultrapure Water (UPW) System Components",
+        "aliases": ["UPW", "ultrapure water", "DI water system", "deionized water", "18 megohm water", "water purification", "RO membrane", "ion exchange resin", "UPW polishing"],
+        "category": "wet_chemistry",
+        "description": (
+            "Ultrapure water (18.2 MΩ·cm resistivity, <1 ppb TOC, <1 ppt metals) "
+            "is the highest-volume consumable in semiconductor manufacturing — a "
+            "300mm fab uses 2–10 million gallons per day. UPW systems combine: "
+            "reverse osmosis (RO) membranes, mixed-bed ion exchange resins, "
+            "UV oxidation units (TOC reduction), ultrafiltration (UF) membranes, "
+            "and electrodeionization (EDI) modules. All of these are consumable "
+            "components requiring periodic replacement. UPW system failure halts "
+            "all wet processing. Water quality directly affects particle counts, "
+            "oxide growth rates, and metal contamination."
+        ),
+        "used_in_steps": ["wafer_prep", "etch_wet", "cmp", "lithography_duv"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Kurita Water Industries", "country": "Japan", "market_share": "~25%",
+             "notes": "Leading UPW system integrator; dominant in Japan and Taiwan fabs"},
+            {"name": "Organo Corporation", "country": "Japan", "market_share": "~20%",
+             "notes": "UPW systems and ion exchange resins; strong in Japanese fabs"},
+            {"name": "Veolia Water Technologies", "country": "France", "market_share": "~20%",
+             "notes": "Global water treatment; UPW systems for US and European fabs"},
+            {"name": "Evoqua Water Technologies", "country": "USA", "market_share": "~15%",
+             "notes": "EDI modules and UPW polishing components"},
+            {"name": "MilliporeSigma (Merck KGaA)", "country": "Germany", "market_share": "~10%",
+             "notes": "UF membranes and analytical-grade water system components"},
+        ],
+        "supply_risks": [
+            "Japan concentration (Kurita, Organo ~45%) for UPW system integration and components",
+            "Ion exchange resin supply — Dow, Purolite, Lanxess; capacity can be constrained during fab buildout cycles",
+            "RO membrane supply — DowDuPont (Filmtec), Toray, Hydranautics; fluoropolymer PFAS regulatory risk",
+            "UPW system failure has immediate production impact — no buffer stock possible for water itself",
+            "Water scarcity increasing in Taiwan and Arizona (TSMC fab locations) — UPW efficiency becoming strategic",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "UPW system components are not export controlled as standalone items.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Low grey market risk for UPW components — these are infrastructure items "
+            "with long qualification cycles. Used ion exchange resins are occasionally "
+            "sold as regenerated product; purity verification is straightforward."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Japan ~45% (Kurita, Organo); France/USA/Germany ~45%",
+        "hs_codes": ["8421.21", "8421.99"],
+    },
+
+    # -----------------------------------------------------------------------
+    # CVD / ALD Precursors & Specialty Gases
+    # -----------------------------------------------------------------------
+
+    "teos_cvd_precursor": {
+        "name": "TEOS (Tetraethyl Orthosilicate) CVD Precursor",
+        "aliases": ["TEOS", "tetraethyl orthosilicate", "TEOS precursor", "PECVD precursor", "CVD silicon dioxide", "silica precursor"],
+        "category": "cvd_precursor",
+        "description": (
+            "The primary precursor for chemical vapor deposition of silicon dioxide "
+            "(SiO2) films. TEOS decomposes at 650–750°C (LPCVD) or at lower "
+            "temperatures with plasma assistance (PECVD-TEOS) to deposit conformal "
+            "SiO2 used as inter-layer dielectric (ILD), hardmask, liner oxide, and "
+            "shallow trench isolation fill. PECVD-TEOS deposits near room temperature, "
+            "enabling use over metal layers. One of the highest-volume liquid CVD "
+            "precursors by consumption. Semiconductor grade requires <1 ppb metallic "
+            "impurities and precise water content control."
+        ),
+        "used_in_steps": ["cvd_deposition", "ald"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Evonik Industries", "country": "Germany", "market_share": "~30%",
+             "notes": "Dynasylan TEOS; major global semiconductor-grade supplier"},
+            {"name": "Merck KGaA", "country": "Germany", "market_share": "~25%",
+             "notes": "Electronic-grade TEOS through Sigma-Aldrich and specialty materials brands"},
+            {"name": "Shin-Etsu Chemical", "country": "Japan", "market_share": "~20%",
+             "notes": "Silicon-based chemical precursors for semiconductor"},
+            {"name": "Gelest (Mitsubishi Chemical)", "country": "USA", "market_share": "~15%",
+             "notes": "Specialty organosilicon precursors including electronic grade TEOS"},
+        ],
+        "supply_risks": [
+            "Germany concentration (~55% of global semiconductor-grade TEOS production) in Evonik and Merck",
+            "TEOS is moisture-sensitive — specialty packaging and handling required for semiconductor grade",
+            "Organosilicon precursor production concentrated in Germany and Japan",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "TEOS is not export controlled under EAR for standard semiconductor applications.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Low grey market risk. Purity substitution is the main concern — "
+            "industrial TEOS sold as semiconductor grade causes oxide film defects."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Germany ~55% (Evonik, Merck); Japan ~20%; USA ~15%",
+        "hs_codes": ["2920.90"],
+    },
+
+    "silane_sih4": {
+        "name": "Silane (SiH4)",
+        "aliases": ["SiH4", "silane", "monosilane", "silicon hydride", "polysilicon precursor", "LPCVD silane", "amorphous silicon precursor"],
+        "category": "cvd_precursor",
+        "description": (
+            "The primary precursor for LPCVD deposition of polycrystalline silicon "
+            "(poly-Si), amorphous silicon (a-Si), and silicon nitride (with NH3). "
+            "Polysilicon deposited from silane is used for gate electrodes (legacy "
+            "nodes), capacitor electrodes (DRAM), and resistors. Silane is a "
+            "pyrophoric gas — it ignites spontaneously on contact with air. This "
+            "property requires specialized gas cabinets, automated valve systems, "
+            "and dedicated abatement. Ultra-high-purity silane (99.9999%+) is "
+            "required for advanced semiconductor applications — metallic impurities "
+            "cause catastrophic device defects."
+        ),
+        "used_in_steps": ["cvd_deposition", "ald"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "SK Materials", "country": "South Korea", "market_share": "~35%",
+             "notes": "Dominant Asian supplier; primary source for Samsung and SK Hynix"},
+            {"name": "Air Products", "country": "USA", "market_share": "~25%",
+             "notes": "Global specialty gas leader; Silane Plus ultra-high purity grade"},
+            {"name": "Linde", "country": "UK/Germany", "market_share": "~20%",
+             "notes": "Global industrial gas; semiconductor-grade silane"},
+            {"name": "REC Silicon", "country": "Norway/USA", "market_share": "~10%",
+             "notes": "Polysilicon and silane from fluidized bed reactor process"},
+        ],
+        "supply_risks": [
+            "Pyrophoric nature requires specialized transport vessels, storage, and abatement — limits logistics flexibility",
+            "Ultra-high purity production is capital-intensive with few qualified global facilities",
+            "SK Materials dominance in Asia — Korean supply disruption would affect DRAM and logic fabs significantly",
+            "Silane is a WMD-relevant precursor in some regulatory frameworks — subject to enhanced scrutiny in certain export scenarios",
+        ],
+        "export_controls": {
+            "status": "partial",
+            "detail": "Silane has dual-use classification in some jurisdictions as a potential WMD precursor and is subject to enhanced export controls to certain destinations. Standard semiconductor supply under EAR99 but may require end-use certificates.",
+            "eccn": "EAR99 (standard); may require end-use certification",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Grey market activity is very low — silane's pyrophoric nature and "
+            "specialized handling requirements make informal trade extremely hazardous. "
+            "The main risk is counterfeit purity certification on cylinders."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "South Korea ~35% (SK Materials); USA ~25%; Europe ~20%",
+        "hs_codes": ["2850.00"],
+    },
+
+    "hmds_adhesion_promoter": {
+        "name": "HMDS (Hexamethyldisilazane) Adhesion Promoter",
+        "aliases": ["HMDS", "hexamethyldisilazane", "adhesion promoter", "photoresist adhesion", "resist primer", "HMDS vapor prime"],
+        "category": "cvd_precursor",
+        "description": (
+            "A silylating agent vapor-deposited on wafer surfaces immediately before "
+            "photoresist coating to improve adhesion. HMDS reacts with surface hydroxyl "
+            "groups on SiO2 to create a hydrophobic trimethylsilyl surface that bonds "
+            "strongly to photoresist polymers. Applied in a vapor prime oven at "
+            "100–120°C with nitrogen carrier gas. Without HMDS priming, photoresist "
+            "delamination during wet processing is common. A standard step before "
+            "every lithography level. Purity requirements focus on moisture content "
+            "and metallic contamination — water contamination deactivates HMDS."
+        ),
+        "used_in_steps": ["lithography_duv", "lithography_euv"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Dow Chemical", "country": "USA", "market_share": "~30%",
+             "notes": "Electronic-grade HMDS; broad semiconductor customer base"},
+            {"name": "Shin-Etsu Chemical", "country": "Japan", "market_share": "~30%",
+             "notes": "Silicone chemistry leader; semiconductor-grade HMDS"},
+            {"name": "Momentive Performance Materials", "country": "USA", "market_share": "~20%",
+             "notes": "Organosilicon specialty chemicals"},
+            {"name": "Evonik Industries", "country": "Germany", "market_share": "~15%",
+             "notes": "Dynasylan brand organosilicon specialty chemicals"},
+        ],
+        "supply_risks": [
+            "HMDS production is well-distributed between US and Japan — moderate supply security",
+            "Moisture sensitivity requires specialty packaging (anhydrous conditions) — degrades rapidly if improperly stored",
+            "Japan export controls on lithography-related chemicals (2023) could theoretically impact HMDS supply to certain destinations",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "HMDS is not export controlled under EAR for standard semiconductor use.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Low grey market risk. HMDS degradation from moisture contamination is "
+            "the primary quality risk — degraded product causes adhesion failures "
+            "that manifest as pattern lift during development."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA ~50% (Dow, Momentive); Japan ~30% (Shin-Etsu); Germany ~15%",
+        "hs_codes": ["2931.90"],
+    },
+
+    # -----------------------------------------------------------------------
+    # Lithography Consumables
+    # -----------------------------------------------------------------------
+
+    "barc_coating": {
+        "name": "Bottom Anti-Reflective Coating (BARC)",
+        "aliases": ["BARC", "ARC", "anti-reflective coating", "bottom ARC", "DARC", "organic ARC", "inorganic ARC", "light absorbing layer"],
+        "category": "lithography_consumable",
+        "description": (
+            "Thin film coatings applied to the wafer before photoresist to absorb "
+            "reflected light from underlying topography, preventing standing wave "
+            "effects and CD variations caused by reflective notching. Organic BARCs "
+            "are spin-coated polymer films; inorganic BARCs (DARCs) are CVD silicon "
+            "oxynitride films. Critical at DUV (193nm) where substrate reflectivity "
+            "causes severe CD non-uniformity without BARC. EUV uses specialized BARC "
+            "formulations. BARC selection and optimization is specific to the resist "
+            "system, substrate, and exposure wavelength — cannot be universally "
+            "substituted between processes."
+        ),
+        "used_in_steps": ["lithography_duv", "lithography_euv"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Brewer Science", "country": "USA", "market_share": "~40%",
+             "notes": "Inventor of BARC; dominant for advanced node organic BARCs; AZ Electronics acquisition"},
+            {"name": "JSR Corporation", "country": "Japan", "market_share": "~25%",
+             "notes": "Lithography materials including BARC; Japan export controls 2023 impact"},
+            {"name": "Merck KGaA (AZ Materials)", "country": "Germany", "market_share": "~20%",
+             "notes": "AZ brand lithography materials including ARC/BARC"},
+            {"name": "Shin-Etsu Chemical", "country": "Japan", "market_share": "~10%",
+             "notes": "Lithography ancillary materials"},
+        ],
+        "supply_risks": [
+            "Japan concentration (JSR, Shin-Etsu ~35%) — subject to Japan export controls on advanced semiconductor materials (2023)",
+            "Brewer Science (USA) dominance for leading-edge node BARC formulations",
+            "BARC formulations are IP-sensitive — only 2–3 suppliers qualified for any given advanced process",
+            "Japan's 2023 export controls explicitly include photoresist-related materials, potentially including some BARC formulations",
+        ],
+        "export_controls": {
+            "status": "partial",
+            "detail": "Japan export controls (July 2023) include 'photoresist-related chemicals' which may encompass advanced BARC formulations. US-made BARCs are generally EAR99 for standard semiconductor use.",
+            "eccn": "EAR99 (US); Japan-controlled for some advanced formulations",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "BARC grey market risk is low — these are highly engineered materials "
+            "qualified to specific process nodes. Substitution with unqualified material "
+            "immediately causes patterning defects detectable at first inspection."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA ~40% (Brewer Science); Japan ~35% (JSR, Shin-Etsu); Germany ~20%",
+        "hs_codes": ["3707.90", "3811.90"],
+    },
+
+    "duv_pellicle": {
+        "name": "DUV Photomask Pellicle",
+        "aliases": ["DUV pellicle", "ArF pellicle", "193nm pellicle", "mask pellicle", "reticle pellicle", "nitrocellulose pellicle", "fluoropolymer pellicle"],
+        "category": "lithography_consumable",
+        "description": (
+            "A thin transparent membrane stretched over a metal frame and mounted "
+            "on the photomask to keep particles out of the focal plane of exposure. "
+            "Particles landing on the pellicle are out of focus and do not print. "
+            "DUV pellicles use nitrocellulose or fluoropolymer membranes transmissive "
+            "at 193nm. Each mask reticle has one pellicle; a 300mm fab has hundreds "
+            "of active reticles each requiring a qualified pellicle. Pellicle lifetime "
+            "is limited by UV dose accumulated — typically 50–500 billion pulses. "
+            "Distinct from EUV pellicles (which are a different, far more challenging "
+            "technology already in the knowledge base)."
+        ),
+        "used_in_steps": ["lithography_duv"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Mitsui Chemicals", "country": "Japan", "market_share": "~40%",
+             "notes": "Leading DUV pellicle supplier; Pellicle brand dominant in Asia"},
+            {"name": "Asahi Kasei", "country": "Japan", "market_share": "~25%",
+             "notes": "DUV pellicle materials and membranes"},
+            {"name": "FST (Freudenberg Sealing Technologies)", "country": "Germany/Taiwan", "market_share": "~20%",
+             "notes": "DUV pellicles; manufacturing in Taiwan"},
+            {"name": "Micro Lithography Inc.", "country": "USA", "market_share": "~10%",
+             "notes": "DUV and broadband pellicles for US fabs"},
+        ],
+        "supply_risks": [
+            "Japan concentration (~65%) in Mitsui Chemicals and Asahi Kasei",
+            "Nitrocellulose and fluoropolymer membrane materials require ultra-high purity processing",
+            "Pellicle frame and adhesive materials must be outgassing-free to avoid contaminating photomask",
+            "DUV pellicle supply is more resilient than EUV (multiple suppliers vs. EUV near-monopoly) but still concentrated",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "DUV pellicles are not export controlled as standalone items (unlike EUV pellicles which may attract scrutiny as part of broader EUV process controls).",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Low grey market activity. Used pellicles have limited resale value as "
+            "UV dose history is difficult to verify. Contaminated or damaged pellicles "
+            "that cause mask defects are the primary failure mode."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Japan ~65% (Mitsui, Asahi Kasei); Germany/Taiwan ~20%; USA ~10%",
+        "hs_codes": ["3920.99", "9001.90"],
+    },
+
+    # -----------------------------------------------------------------------
+    # Gas & Fluid Infrastructure
+    # -----------------------------------------------------------------------
+
+    "specialty_gas_purifiers": {
+        "name": "Point-of-Use Specialty Gas Purifiers",
+        "aliases": ["gas purifier", "POU purifier", "getter purifier", "in-line purifier", "gas scrubber", "SAES purifier", "hot getter", "Nanochem purifier"],
+        "category": "gas_infrastructure",
+        "description": (
+            "Inline purification modules installed in gas delivery lines immediately "
+            "before the process chamber to remove trace moisture (H2O), oxygen (O2), "
+            "and hydrocarbons from specialty process gases. Use reactive metal getter "
+            "materials (Zr alloys, Ti) or catalytic beds that chemisorb contaminants "
+            "at elevated temperatures. Critical for ALD and CVD processes where ppb-level "
+            "oxygen contamination causes interface traps and film quality degradation. "
+            "For high-k gate dielectrics (HfO2), O2 contamination at 10 ppb levels "
+            "causes measurable threshold voltage shifts. Purifier cartridges are "
+            "consumables replaced every 6–24 months; exhausted purifiers can outgas "
+            "previously captured contaminants if temperature cycles occur."
+        ),
+        "used_in_steps": ["cvd_deposition", "ald", "etch_dry"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Entegris (SAES Getters acquisition)", "country": "USA/Italy", "market_share": "~45%",
+             "notes": "SAES brand point-of-use purifiers; Entegris acquired SAES Getters semiconductor division"},
+            {"name": "Matheson Gas (IXYS/Air Products)", "country": "USA", "market_share": "~25%",
+             "notes": "Nanochem series gas purifiers; strong in inert and reactive gas purification"},
+            {"name": "Mott Corporation", "country": "USA", "market_share": "~15%",
+             "notes": "Porous metal and specialty gas filtration/purification"},
+            {"name": "Japan Pionics", "country": "Japan", "market_share": "~10%",
+             "notes": "Specialty gas purification for Japanese fabs"},
+        ],
+        "supply_risks": [
+            "Entegris concentration — SAES acquisition added gas purifiers to an already broad Entegris semiconductor consumable portfolio",
+            "Getter material supply — reactive metal alloys (Zr, Ti) for getter beds have some geographic concentration",
+            "Purifier qualification to specific gas/tool/process combinations is extensive — cannot switch mid-process",
+            "Exhausted purifiers require specialized disposal (pyrophoric getter materials)",
+        ],
+        "export_controls": {
+            "status": "partial",
+            "detail": "Advanced gas purifiers for ALD/CVD of sub-7nm films may be subject to EAR controls as components of controlled semiconductor equipment. Standard purifiers are EAR99.",
+            "eccn": "EAR99 (standard); 3B991 (advanced process)",
+        },
+        "grey_market_risk": "medium",
+        "grey_market_detail": (
+            "Used or exhausted gas purifiers are sometimes sold as functional product. "
+            "An exhausted getter purifier provides no protection and may release captured "
+            "contaminants — causing immediate process excursions. Visual inspection cannot "
+            "distinguish a functional from an exhausted purifier."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "USA dominant (Entegris/SAES, Matheson, Mott); Japan ~10%",
+        "hs_codes": ["8421.39", "8419.89"],
+    },
+
+    "gas_abatement_systems": {
+        "name": "Process Gas Abatement Systems",
+        "aliases": ["abatement system", "scrubber", "gas scrubber", "exhaust treatment", "PFC abatement", "burn box", "wet scrubber", "plasma abatement"],
+        "category": "gas_infrastructure",
+        "description": (
+            "End-of-pipe treatment systems that destroy or capture toxic, hazardous, "
+            "and environmentally regulated process gases from fab exhaust streams. "
+            "Types: combustion (burn box) for silane/pyrophorics; wet scrubbers for "
+            "acid gases (HCl, HF, Cl2); catalytic oxidizers for PFCs (CF4, SF6, NF3); "
+            "and plasma abatement for mixed gas streams. Required by safety regulations "
+            "and environmental permits — a fab cannot legally operate without adequate "
+            "abatement. PFC abatement is increasingly critical under carbon footprint "
+            "reduction commitments (SF6 has 22,800× CO2 global warming potential). "
+            "Abatement systems are capital equipment but have significant consumable "
+            "costs: combustion fuel, scrubber water, and catalyst replacement."
+        ),
+        "used_in_steps": ["etch_dry", "cvd_deposition", "ald"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Edwards Vacuum (Atlas Copco)", "country": "UK", "market_share": "~40%",
+             "notes": "GSX and EPX series; dominant global abatement supplier for logic fabs"},
+            {"name": "CS Clean Solutions", "country": "Germany", "market_share": "~20%",
+             "notes": "High-efficiency abatement for PFC and acid gas streams"},
+            {"name": "Ebara Corporation", "country": "Japan", "market_share": "~20%",
+             "notes": "Strong in Japanese and Korean memory fabs; dry pump and abatement systems"},
+            {"name": "DAS Environmental Expert", "country": "Germany", "market_share": "~12%",
+             "notes": "Catalytic oxidation abatement for PFC destruction"},
+        ],
+        "supply_risks": [
+            "Abatement is a regulatory compliance requirement — failure to maintain abatement systems risks fab operating permit",
+            "Edwards (UK/Atlas Copco) dominance in logic fab segment",
+            "Abatement consumables (catalyst, burner fuel, scrubber water treatment) are ongoing costs",
+            "PFC abatement efficiency standards tightening under semiconductor industry sustainability commitments",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "Abatement systems are generally not export controlled. Components may be subject to standard dual-use rules.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Low grey market risk — abatement systems are capital equipment with "
+            "known provenance. Used systems are traded at decommissioned fabs but "
+            "require full certification and compliance testing before reuse."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "UK ~40% (Edwards); Germany ~32% (CS Clean, DAS); Japan ~20% (Ebara)",
+        "hs_codes": ["8421.39", "8421.29"],
+    },
+
+    # -----------------------------------------------------------------------
+    # Back-End Process
+    # -----------------------------------------------------------------------
+
+    "wafer_dicing_blades": {
+        "name": "Wafer Dicing Blades",
+        "aliases": ["dicing blade", "diamond blade", "CBN blade", "dicing saw blade", "Disco blade", "semiconductor dicing", "die singulation blade"],
+        "category": "back_end_consumable",
+        "description": (
+            "Precision diamond or cubic boron nitride (CBN) abrasive blades used "
+            "in wafer dicing saws to singulate individual dies from finished wafers. "
+            "Blades are hub-mounted or hubless (resin or metal bond), 40–300µm thick, "
+            "and rotate at 30,000–60,000 RPM with deionized water cooling. Blade "
+            "specification (diamond grit size, bond hardness, blade thickness) is "
+            "optimized for each die material, street width, and target kerf quality. "
+            "Chipping at die edges — both front-side (silicon) and back-side — "
+            "is a primary cause of die cracking in assembly. Blade lifetime: "
+            "approximately 30–100 linear meters of cut. A 300mm fab with multiple "
+            "product types may use dozens of blade specifications simultaneously."
+        ),
+        "used_in_steps": ["wafer_dicing"],
+        "availability": "specialized",
+        "key_suppliers": [
+            {"name": "Disco Corporation", "country": "Japan", "market_share": "~70%",
+             "notes": "Near-monopoly in wafer dicing blades and dicing saw equipment; both blade and saw sold together"},
+            {"name": "Kulicke & Soffa (K&S)", "country": "USA/Singapore", "market_share": "~15%",
+             "notes": "Dicing blades and wire bonding equipment"},
+            {"name": "ADT (Advanced Dicing Technologies)", "country": "Israel", "market_share": "~10%",
+             "notes": "Specialty dicing blades; thin blade specialist"},
+        ],
+        "supply_risks": [
+            "Disco Corporation near-monopoly (~70%) in both dicing blades and the saws they run on — extreme single-company concentration",
+            "Japan concentration — Disco is headquartered and manufactures primarily in Japan",
+            "Diamond abrasive supply — synthetic diamond production concentrated in China (~80% of global synthetic industrial diamond)",
+            "Blade specification qualification: optimizing a blade for a new die material or street width requires weeks of development",
+            "Disco dicing blades are optimized for Disco saws; third-party blades on Disco equipment require qualification",
+        ],
+        "export_controls": {
+            "status": "none",
+            "detail": "Dicing blades are not export controlled. Dicing saws (capital equipment) may attract scrutiny for export to certain destinations.",
+            "eccn": "EAR99",
+        },
+        "grey_market_risk": "low",
+        "grey_market_detail": (
+            "Grey market activity in dicing blades is low — blades are consumables with "
+            "clear lifetime limits. The main risk is use of incorrect or unqualified blade "
+            "specifications that cause excessive chipping, reducing die yield in assembly."
+        ),
+        "critical_mineral": False,
+        "geographic_concentration": "Japan dominant (Disco ~70%); USA/Singapore ~15%; Israel ~10%",
+        "hs_codes": ["8202.39", "6804.21"],
     },
 }
 
