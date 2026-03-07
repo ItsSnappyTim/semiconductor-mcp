@@ -69,7 +69,7 @@ async def search(query: str, max_results: int = 5) -> list[PaperResult]:
             doi = doi_el.text.strip()
 
         authors = [
-            a.find("atom:name", _NS).text  # type: ignore[union-attr]
+            a.find("atom:name", _NS).text or ""  # type: ignore[union-attr]
             for a in entry.findall("atom:author", _NS)
             if a.find("atom:name", _NS) is not None
         ]

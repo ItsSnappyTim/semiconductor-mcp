@@ -74,7 +74,7 @@ async def search_regulations(
         return [{"error": str(exc)}]
 
     docs = data.get("results", [])
-    results: list[RegulationDoc] = [
+    results: list[RegulationDoc | dict[str, Any]] = [
         RegulationDoc(
             title=d.get("title", ""),
             type=d.get("type", ""),

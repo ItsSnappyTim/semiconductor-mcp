@@ -73,7 +73,7 @@ async def _search(query: str, days: int, max_records: int = 10) -> list[GdeltArt
             return [{"error": str(exc)}]
 
     articles = data.get("articles", []) if data else []
-    results: list[GdeltArticle] = [
+    results: list[GdeltArticle | dict[str, Any]] = [
         GdeltArticle(
             title=a.get("title", ""),
             url=a.get("url", ""),

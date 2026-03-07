@@ -120,7 +120,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
+        try:
+            cl_int = int(content_length) if content_length else 0
+        except ValueError:
+            return Response("Bad Request", status_code=400)
+        if cl_int > MAX_REQUEST_BODY_BYTES:
             return Response("Request Entity Too Large", status_code=413)
         return await call_next(request)
 
@@ -392,7 +396,7 @@ if ENABLE_EVAL:
 
                 # 2. Deduplicate academic results by DOI, build context list
                 seen_dois: set[str] = set()
-                academic: list[dict[str, Any]] = []
+                academic: list[Any] = []
                 for r in ss_results + arxiv_results:
                     doi = r.get("doi")
                     if doi:
@@ -407,10 +411,10 @@ if ENABLE_EVAL:
                     if r.get("abstract"):
                         contexts.append(f"{r['title']}: {r['abstract']}")
                         sources.append({"type": "academic", "title": r["title"], "url": r.get("url", ""), "year": r.get("year", "")})
-                for r in news_results[:4]:
-                    if r.get("description"):
-                        contexts.append(f"{r['title']}: {r['description']}")
-                        sources.append({"type": "news", "title": r["title"], "url": r.get("url", ""), "published_at": r.get("published_at", "")})
+                for nr in news_results[:4]:
+                    if nr.get("description"):
+                        contexts.append(f"{nr['title']}: {nr['description']}")
+                        sources.append({"type": "news", "title": nr["title"], "url": nr.get("url", ""), "published_at": nr.get("published_at", "")})
 
                 if not contexts:
                     if not best:
@@ -631,7 +635,7 @@ if ENABLE_EVAL:
             # ---------------------------------------------------------------
 
             # --- Federal Register: BIS/OFAC regulatory docs (past 12 months) ---
-            async def _fetch_fedreg() -> list[dict[str, Any]]:
+            async def _fetch_fedreg() -> list[Any]:
                 try:
                     docs = await _federal_register.search_export_controls(query, days=365)
                     return docs if isinstance(docs, list) else []
@@ -653,8 +657,8 @@ if ENABLE_EVAL:
             if not chem_names:
                 chem_names = [query]
 
-            async def _fetch_pubchem() -> list[dict[str, Any]]:
-                results = []
+            async def _fetch_pubchem() -> list[Any]:
+                results: list[Any] = []
                 for name in chem_names[:2]:  # max 2 lookups
                     try:
                         data = await _pubchem.get_chemical_data(name)
@@ -687,8 +691,8 @@ if ENABLE_EVAL:
                         metals_to_fetch.append(metal)
                         seen_metals.add(metal)
 
-            async def _fetch_commodity_prices() -> list[dict[str, Any]]:
-                results = []
+            async def _fetch_commodity_prices() -> list[Any]:
+                results: list[Any] = []
                 for metal in metals_to_fetch[:3]:  # max 3 price lookups
                     try:
                         data = await _world_bank.get_commodity_price(metal)
@@ -698,18 +702,12 @@ if ENABLE_EVAL:
                 return results
 
             # Run all three concurrently — different APIs, no shared rate limits
+            # Each helper already catches all exceptions internally and returns [].
             fedreg_raw, pubchem_raw, commodity_raw = await asyncio.gather(
                 _fetch_fedreg(),
                 _fetch_pubchem(),
                 _fetch_commodity_prices(),
-                return_exceptions=True,
             )
-            if isinstance(fedreg_raw, Exception):
-                fedreg_raw = []
-            if isinstance(pubchem_raw, Exception):
-                pubchem_raw = []
-            if isinstance(commodity_raw, Exception):
-                commodity_raw = []
 
             # Build Federal Register context
             fedreg_context: list[str] = []
@@ -923,7 +921,9 @@ def main() -> None:
 
     config = uvicorn.Config(app, host="0.0.0.0", port=PORT)
     server = uvicorn.Server(config)
-    server.config.callback_notify = lambda: None  # silence default notify
+    async def _noop() -> None:
+        pass
+    server.config.callback_notify = _noop  # silence default notify
     # Register shutdown hook without modifying Server internals
     import asyncio as _asyncio
     import atexit

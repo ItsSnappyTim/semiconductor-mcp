@@ -14,7 +14,7 @@ import httpx
 
 from ..cache import TTLCache
 from ..http_client import request_with_retry
-from ..schemas import ITAResult
+from ..schemas import ITAMatch, ITAResult
 
 _BASE = "https://data.trade.gov/consolidated_screening_list/v1/search"
 _TIMEOUT = 20.0
@@ -56,7 +56,7 @@ async def screen_entity(name: str, api_key: str) -> ITAResult | dict[str, Any]:
     total = data.get("total", 0)
     raw_results = data.get("results", [])
 
-    results = []
+    results: list[ITAMatch] = []
     for r in raw_results[:10]:
         results.append({
             "name": r.get("name", ""),

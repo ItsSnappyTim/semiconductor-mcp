@@ -67,7 +67,7 @@ async def search_filings(
         return [{"error": str(exc)}]
 
     hits = data.get("hits", {}).get("hits", [])
-    results: list[FilingResult] = []
+    results: list[FilingResult | dict[str, Any]] = []
     for hit in hits[:max_results]:
         src = hit.get("_source", {})
         display_names = src.get("display_names", [])

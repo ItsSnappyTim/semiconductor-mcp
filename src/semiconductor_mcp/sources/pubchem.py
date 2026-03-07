@@ -7,11 +7,11 @@ solvents, specialty gases).
 
 import asyncio
 import urllib.parse
-from typing import Any
+from typing import Any, cast
 
 from ..cache import TTLCache
 from ..http_client import get_client
-from ..schemas import ChemicalData
+from ..schemas import ChemicalData, GHSData
 
 _BASE_PUG = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 _BASE_PUG_VIEW = "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view"
@@ -161,7 +161,7 @@ async def get_chemical_data(name: str) -> ChemicalData | dict[str, Any]:
         molecular_weight=props.get("MolecularWeight", ""),
         iupac_name=props.get("IUPACName", ""),
         canonical_smiles=props.get("CanonicalSMILES", ""),
-        ghs=ghs,
+        ghs=cast(GHSData, ghs),
     )
     _cache.set(cache_key, result)
     return result

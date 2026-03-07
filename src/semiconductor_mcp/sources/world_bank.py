@@ -23,7 +23,7 @@ import httpx
 
 from ..cache import TTLCache
 from ..http_client import request_with_retry
-from ..schemas import CommodityPrice
+from ..schemas import CommodityPrice, PricePoint
 
 _BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 _TIMEOUT = 15.0
@@ -126,7 +126,7 @@ async def get_commodity_price(material: str, months: int = 13) -> CommodityPrice
     timestamps = chart.get("timestamp", [])
     closes = (chart.get("indicators") or {}).get("quote", [{}])[0].get("close", [])
 
-    prices = []
+    prices: list[PricePoint] = []
     for ts, price in zip(timestamps, closes):
         if price is None:
             continue

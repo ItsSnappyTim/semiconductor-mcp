@@ -13,7 +13,7 @@ import httpx
 
 from ..cache import TTLCache
 from ..http_client import request_with_retry
-from ..schemas import SanctionsResult
+from ..schemas import SanctionsMatch, SanctionsResult
 
 _BASE = "https://api.opensanctions.org"
 _TIMEOUT = 20.0
@@ -68,7 +68,7 @@ async def screen_entity(name: str, api_key: str = "") -> SanctionsResult | dict[
         return {"total": 0, "risk": "UNKNOWN", "matches": [], "error": str(exc)}
 
     raw_results = data.get("results", [])
-    matches = []
+    matches: list[SanctionsMatch] = []
     for entity in raw_results:
         props = entity.get("properties", {})
         matches.append({
