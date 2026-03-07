@@ -728,19 +728,24 @@ if ENABLE_EVAL:
 
                         if not isinstance(edgar_res, Exception) and isinstance(edgar_res, list):
                             for filing in edgar_res[:2]:
-                                excerpt = filing.get("excerpt", "")
-                                if excerpt:
-                                    contexts.append(
-                                        f"{filing.get('company_name', entity)} "
-                                        f"{filing.get('form_type', 'filing')} "
-                                        f"({str(filing.get('filed_at', ''))[:10]}): "
-                                        f"{excerpt[:500]}"
-                                    )
-                                    sources.append({
-                                        "type": "edgar",
-                                        "title": f"{entity} {filing.get('form_type', 'SEC Filing')}",
-                                        "url": filing.get("file_url", ""),
-                                    })
+                                if filing.get("error") or not filing.get("company_name"):
+                                    continue
+                                excerpt = filing.get("excerpt") or (
+                                    f"SEC {filing.get('form_type', 'filing')} filed "
+                                    f"{str(filing.get('filed_at', ''))[:10]}, "
+                                    f"period ending {filing.get('period', 'unknown')}."
+                                )
+                                contexts.append(
+                                    f"{filing.get('company_name', entity)} "
+                                    f"{filing.get('form_type', 'filing')} "
+                                    f"({str(filing.get('filed_at', ''))[:10]}): "
+                                    f"{excerpt[:500]}"
+                                )
+                                sources.append({
+                                    "type": "edgar",
+                                    "title": f"{entity} {filing.get('form_type', 'SEC Filing')}",
+                                    "url": filing.get("file_url", ""),
+                                })
 
                         if not isinstance(sanc_res, Exception) and isinstance(sanc_res, dict):
                             if sanc_res.get("total", 0) > 0:

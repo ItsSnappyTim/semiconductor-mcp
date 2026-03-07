@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-_BASE = "http://api.gdeltproject.org/api/v2/doc/doc"
+_BASE = "https://api.gdeltproject.org/api/v2/doc/doc"
 _TIMEOUT = 15
 _RETRY_DELAYS = [3.0, 6.0]  # seconds to wait after 429 before retrying
 _HEADERS = {"User-Agent": "semiconductor-mcp-research/1.0"}

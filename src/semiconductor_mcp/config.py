@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _whitepaper_dir = os.environ.get("WHITEPAPER_DIR", "")
 WHITEPAPER_DIR = Path(_whitepaper_dir) if _whitepaper_dir else PROJECT_ROOT / "data" / "whitepapers"

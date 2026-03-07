@@ -34,6 +34,20 @@ def init_db() -> None:
                     INSERT INTO whitepapers_fts(rowid, title, full_text)
                     VALUES (new.id, new.title, new.full_text);
                 END;
+
+            CREATE TRIGGER IF NOT EXISTS whitepapers_au
+                AFTER UPDATE ON whitepapers BEGIN
+                    INSERT INTO whitepapers_fts(whitepapers_fts, rowid, title, full_text)
+                    VALUES ('delete', old.id, old.title, old.full_text);
+                    INSERT INTO whitepapers_fts(rowid, title, full_text)
+                    VALUES (new.id, new.title, new.full_text);
+                END;
+
+            CREATE TRIGGER IF NOT EXISTS whitepapers_ad
+                AFTER DELETE ON whitepapers BEGIN
+                    INSERT INTO whitepapers_fts(whitepapers_fts, rowid, title, full_text)
+                    VALUES ('delete', old.id, old.title, old.full_text);
+                END;
         """)
 
 
@@ -52,10 +66,11 @@ def insert_whitepaper(
                 page_count = excluded.page_count,
                 file_path  = excluded.file_path,
                 full_text  = excluded.full_text
+            RETURNING id
             """,
             (filename, title, added_at, page_count, file_path, full_text),
         )
-        return cur.lastrowid  # type: ignore[return-value]
+        return cur.fetchone()[0]
 
 
 def _escape_fts5(query: str) -> str:
