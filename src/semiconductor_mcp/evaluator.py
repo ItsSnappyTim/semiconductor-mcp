@@ -4,6 +4,9 @@ Three metrics:
   faithfulness        — fraction of answer claims supported by retrieved contexts
   answer_relevancy    — does the answer address the question asked
   context_utilization — did the answer draw from the contexts vs parametric memory
+
+Generation and evaluation use separate configurable models (GENERATION_MODEL and
+EVAL_MODEL env vars), so cost/quality trade-offs can be tuned independently.
 """
 
 import asyncio
@@ -13,10 +16,9 @@ from typing import Any
 
 import httpx
 
-from .config import ANTHROPIC_API_KEY
+from .config import ANTHROPIC_API_KEY, EVAL_MODEL, GENERATION_MODEL
 
 _API_URL = "https://api.anthropic.com/v1/messages"
-_MODEL = "claude-haiku-4-5-20251001"
 _TIMEOUT = 45
 _MAX_CONTEXT_CHARS = 2000  # per context passage, to avoid token overflow
 
@@ -34,14 +36,20 @@ def _fmt_contexts(contexts: list[str]) -> str:
     return "\n\n".join(f"[{i + 1}] {c}" for i, c in enumerate(truncated))
 
 
-async def _call_haiku(client: httpx.AsyncClient, system: str, user: str, max_tokens: int = 512) -> str:
+async def _call_model(
+    client: httpx.AsyncClient,
+    model: str,
+    system: str,
+    user: str,
+    max_tokens: int = 512,
+) -> str:
+    """Call an Anthropic model with retry on 429 (free-tier rate limits)."""
     payload = {
-        "model": _MODEL,
+        "model": model,
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
-    # Retry with backoff on 429 — free-tier Anthropic key has per-minute limits
     for delay in [0.0, 2.0, 5.0]:
         if delay:
             await asyncio.sleep(delay)
@@ -50,8 +58,18 @@ async def _call_haiku(client: httpx.AsyncClient, system: str, user: str, max_tok
             continue
         resp.raise_for_status()
         return resp.json()["content"][0]["text"]
-    resp.raise_for_status()  # raise on final 429
-    return ""  # unreachable
+    resp.raise_for_status()
+    return ""
+
+
+async def _call_generation(client: httpx.AsyncClient, system: str, user: str, max_tokens: int = 512) -> str:
+    """Call the configured generation model (GENERATION_MODEL env var)."""
+    return await _call_model(client, GENERATION_MODEL, system, user, max_tokens)
+
+
+async def _call_eval(client: httpx.AsyncClient, system: str, user: str, max_tokens: int = 512) -> str:
+    """Call the configured evaluation model (EVAL_MODEL env var)."""
+    return await _call_model(client, EVAL_MODEL, system, user, max_tokens)
 
 
 def _extract_json(text: str) -> Any:
@@ -108,8 +126,7 @@ async def _faithfulness(
     client: httpx.AsyncClient, question: str, contexts: list[str], answer: str
 ) -> dict[str, Any]:
     try:
-        # Step A: extract claims
-        raw = await _call_haiku(
+        raw = await _call_eval(
             client,
             _CLAIM_EXTRACTION_SYSTEM,
             f"<answer>{answer}</answer>",
@@ -128,10 +145,9 @@ async def _faithfulness(
                 "error": None,
             }
 
-        # Step B: batch-verify all claims; use 256 tokens per claim to avoid truncation
         claims_text = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(claims))
         batch_max_tokens = min(4096, max(1024, len(claims) * 256))
-        raw = await _call_haiku(
+        raw = await _call_eval(
             client,
             _CLAIM_VERIFICATION_SYSTEM,
             f"<contexts>\n{_fmt_contexts(contexts)}\n</contexts>\n\n<claims>\n{claims_text}\n</claims>",
@@ -141,7 +157,6 @@ async def _faithfulness(
             parsed = _extract_json(raw)
             verdicts: list[dict] = parsed.get("verdicts", [])
         except ValueError:
-            # Batch response truncated — fall back to verifying each claim individually
             verdicts = []
             _SINGLE_SYSTEM = _CLAIM_VERIFICATION_SYSTEM.replace(
                 "Output ONLY a JSON object in this exact format (no other text):\n"
@@ -150,7 +165,7 @@ async def _faithfulness(
             )
             for claim in claims:
                 try:
-                    r = await _call_haiku(
+                    r = await _call_eval(
                         client, _SINGLE_SYSTEM,
                         f"<contexts>\n{_fmt_contexts(contexts)}\n</contexts>\n\n<claim>{claim}</claim>",
                         max_tokens=128,
@@ -203,7 +218,7 @@ async def _answer_relevancy(
     client: httpx.AsyncClient, question: str, contexts: list[str], answer: str
 ) -> dict[str, Any]:
     try:
-        raw = await _call_haiku(
+        raw = await _call_eval(
             client,
             _RELEVANCY_SYSTEM,
             f"<question>{question}</question>\n\n<answer>{answer}</answer>",
@@ -244,7 +259,7 @@ async def _context_utilization(
     client: httpx.AsyncClient, question: str, contexts: list[str], answer: str
 ) -> dict[str, Any]:
     try:
-        raw = await _call_haiku(
+        raw = await _call_eval(
             client,
             _CTX_UTIL_SYSTEM,
             f"<contexts>\n{_fmt_contexts(contexts)}\n</contexts>\n\n<answer>{answer}</answer>",
@@ -268,8 +283,18 @@ async def _context_utilization(
 _DRAFT_SYSTEM = """\
 You are a semiconductor industry expert. Answer the question based STRICTLY on
 the provided context passages — do not use outside knowledge. If the contexts
-don't support a claim, do not make it. Be specific, cite concrete details from
-the contexts, and keep the answer focused and factual.
+don't support a claim, do not make it.
+
+CITATION REQUIREMENT: Cite every factual claim with [N] where N is the number
+of the context passage it comes from, e.g. "TSMC holds 90% of leading-edge
+foundry capacity [3]."
+
+INSUFFICIENT EVIDENCE GUARDRAIL: If the contexts do not contain enough
+information to answer the question, respond with exactly:
+  "Insufficient evidence: [brief explanation of what information is missing]"
+Do not speculate or fill gaps with general knowledge.
+
+Be specific, concise, and factual.
 """
 
 _REFINE_QUERY_SYSTEM = """\
@@ -281,8 +306,8 @@ papers or news articles. Output ONLY the improved query string, nothing else.
 
 
 async def draft_answer(client: httpx.AsyncClient, question: str, contexts: list[str]) -> str:
-    """Generate a context-grounded answer using Haiku."""
-    raw = await _call_haiku(
+    """Generate a context-grounded answer using the generation model."""
+    raw = await _call_generation(
         client,
         _DRAFT_SYSTEM,
         f"<question>{question}</question>\n\n<contexts>\n{_fmt_contexts(contexts)}\n</contexts>\n\nAnswer:",
@@ -295,7 +320,7 @@ async def refine_query(
     client: httpx.AsyncClient, question: str, prev_query: str, issue: str
 ) -> str:
     """Generate an improved search query based on what the previous one missed."""
-    raw = await _call_haiku(
+    raw = await _call_generation(
         client,
         _REFINE_QUERY_SYSTEM,
         f"<question>{question}</question>\n<prev_query>{prev_query}</prev_query>\n<issue>{issue}</issue>\n\nImproved query:",
@@ -319,9 +344,9 @@ If no companies or organizations are named, return [].
 
 
 async def extract_entities(client: httpx.AsyncClient, question: str) -> list[str]:
-    """Extract named company/organization entities from a question using Haiku."""
+    """Extract named company/organization entities from a question."""
     try:
-        raw = await _call_haiku(
+        raw = await _call_generation(
             client,
             _ENTITY_EXTRACTION_SYSTEM,
             f"<question>{question}</question>",
@@ -337,13 +362,12 @@ async def extract_entities(client: httpx.AsyncClient, question: str) -> list[str
 
 async def question_to_query(client: httpx.AsyncClient, question: str) -> str:
     """Convert a natural language question into search-friendly keywords (max 5 words)."""
-    raw = await _call_haiku(
+    raw = await _call_generation(
         client,
         _KEYWORDS_SYSTEM,
         f"<question>{question}</question>\n\nSearch query (3-5 key terms only):",
         max_tokens=32,
     )
-    # Hard cap at 5 words to keep arXiv AND query tractable
     words = raw.strip().strip("\"'").split()
     return " ".join(words[:5])
 
@@ -364,7 +388,8 @@ async def _eval_with_client(
             "context_utilization": ctx_util,
         },
         "composite_score": composite,
-        "eval_model": _MODEL,
+        "generation_model": GENERATION_MODEL,
+        "eval_model": EVAL_MODEL,
     }
 
 
@@ -389,6 +414,7 @@ async def evaluate_response(question: str, contexts: list[str], answer: str) -> 
             "context_utilization": ctx_util,
         },
         "composite_score": composite,
-        "eval_model": _MODEL,
+        "generation_model": GENERATION_MODEL,
+        "eval_model": EVAL_MODEL,
     }
     return json.dumps(result, ensure_ascii=False, indent=2)

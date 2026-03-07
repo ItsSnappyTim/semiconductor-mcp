@@ -12,19 +12,18 @@ from typing import Any
 
 import httpx
 
+from ..cache import TTLCache
+from ..http_client import request_with_retry
+from ..schemas import ITAResult
+
 _BASE = "https://data.trade.gov/consolidated_screening_list/v1/search"
-_TIMEOUT = 20
+_TIMEOUT = 20.0
+
+_cache: TTLCache = TTLCache(ttl_seconds=3600, name="bis_screening")  # 1 hour
 
 
-async def screen_entity(name: str, api_key: str) -> dict[str, Any]:
-    """Screen an entity name against the ITA Consolidated Screening List.
-
-    Returns:
-      total    — number of matching records
-      results  — list of matches with name, list source, and addresses
-      risk     — "CLEAR" | "FLAGGED" | "BLOCKED"
-      note     — human-readable summary
-    """
+async def screen_entity(name: str, api_key: str) -> ITAResult | dict[str, Any]:
+    """Screen an entity name against the ITA Consolidated Screening List."""
     if not api_key:
         return {
             "total": 0,
@@ -37,11 +36,15 @@ async def screen_entity(name: str, api_key: str) -> dict[str, Any]:
             ),
         }
 
+    cache_key = name.strip().lower()
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     params = {"name": name, "subscription-key": api_key}
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(_BASE, params=params)
-            resp.raise_for_status()
+        resp = await request_with_retry(_BASE, params=params, timeout=_TIMEOUT)
+        resp.raise_for_status()
         data = resp.json()
     except httpx.TimeoutException:
         return {"total": 0, "results": [], "risk": "UNKNOWN", "error": "ITA API timeout"}
@@ -64,7 +67,7 @@ async def screen_entity(name: str, api_key: str) -> dict[str, Any]:
             "end_date": r.get("end_date", ""),
         })
 
-    # Risk classification (substring match — source names include verbose suffixes)
+    # Risk classification
     def _matches(source: str, keywords: list[str]) -> bool:
         s = source.lower()
         return any(k in s for k in keywords)
@@ -79,10 +82,12 @@ async def screen_entity(name: str, api_key: str) -> dict[str, Any]:
     elif results:
         risk = "FLAGGED"
 
-    return {
-        "query": name,
-        "total": total,
-        "results": results,
-        "risk": risk,
-        "note": f"{total} match(es) found across ITA Consolidated Screening List.",
-    }
+    result = ITAResult(
+        query=name,
+        total=total,
+        results=results,
+        risk=risk,
+        note=f"{total} match(es) found across ITA Consolidated Screening List.",
+    )
+    _cache.set(cache_key, result)
+    return result

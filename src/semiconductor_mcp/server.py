@@ -1,6 +1,9 @@
 import asyncio
+import collections
 import hmac
 import json
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,21 +14,36 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from .config import (
-    COMTRADE_API_KEY, ENABLE_EVAL, ITA_API_KEY, OPENSANCTIONS_API_KEY,
-    MCP_AUTH_TOKEN, PORT, WHITEPAPER_DIR, validate_config,
+    COMTRADE_API_KEY,
+    ENABLE_EVAL,
+    ITA_API_KEY,
+    LOG_LEVEL,
+    MAX_REQUEST_BODY_BYTES,
+    MCP_AUTH_TOKEN,
+    OPENSANCTIONS_API_KEY,
+    PORT,
+    RATE_LIMIT_RPM,
+    WHITEPAPER_DIR,
+    validate_config,
 )
 from .db import init_db, insert_whitepaper, list_all, search_fts
+from .http_client import close_client
 from .knowledge_base import search as _kb_search
+from .logging_config import setup_logging
 from .pdf_utils import extract_pdf
-from .sources import arxiv, newsapi, semantic_scholar
 from .sources import bis_screening as _bis_screening
 from .sources import comtrade as _comtrade
 from .sources import edgar as _edgar
 from .sources import federal_register as _federal_register
 from .sources import gdelt as _gdelt
+from .sources import newsapi
 from .sources import opensanctions as _opensanctions
 from .sources import pubchem as _pubchem
 from .sources import world_bank as _world_bank
+
+# Configure structured JSON logging before anything else
+setup_logging(LOG_LEVEL)
+logger = logging.getLogger(__name__)
 
 # Validate required config at startup
 validate_config()
@@ -67,9 +85,56 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 # Health endpoint
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Rate limiting middleware
+# ---------------------------------------------------------------------------
+
+class _RateLimiter:
+    """Simple sliding-window rate limiter (single process, asyncio-safe)."""
+    def __init__(self, max_requests: int, window_seconds: float):
+        self._max = max_requests
+        self._window = window_seconds
+        self._timestamps: collections.deque[float] = collections.deque()
+
+    def is_allowed(self) -> bool:
+        now = time.monotonic()
+        while self._timestamps and now - self._timestamps[0] > self._window:
+            self._timestamps.popleft()
+        if len(self._timestamps) >= self._max:
+            return False
+        self._timestamps.append(now)
+        return True
+
+
+_rate_limiter = _RateLimiter(RATE_LIMIT_RPM, 60.0)
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
+        if request.url.path != "/health" and not _rate_limiter.is_allowed():
+            logger.warning("rate_limit_exceeded", extra={"path": request.url.path})
+            return Response("Too Many Requests", status_code=429)
+        return await call_next(request)
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
+            return Response("Request Entity Too Large", status_code=413)
+        return await call_next(request)
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+    checks: dict[str, Any] = {"status": "ok", "db": "ok", "config": "ok"}
+    try:
+        list_all()
+    except Exception as exc:
+        checks["db"] = f"error: {exc}"
+        checks["status"] = "degraded"
+    status_code = 200 if checks["status"] == "ok" else 503
+    return JSONResponse(checks, status_code=status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +171,7 @@ async def add_whitepaper(file_path: str) -> str:
             asyncio.to_thread(extract_pdf, path),
             timeout=60.0,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return json.dumps({"error": "PDF extraction timed out (>60s)"})
     except Exception as exc:
         return json.dumps({"error": f"Failed to extract PDF: {exc}"})
@@ -185,6 +250,8 @@ async def screen_entity(entity_name: str, country: str = "") -> str:
     """
     entity_name = _truncate(entity_name, 200)
     country = _truncate(country, 100)
+    logger.info("tool_call", extra={"tool": "screen_entity", "entity": entity_name})
+    _t0 = time.monotonic()
     opensanctions_future = _opensanctions.screen_entity(entity_name, OPENSANCTIONS_API_KEY)
     bis_future = _bis_screening.screen_entity(entity_name, ITA_API_KEY)
 
@@ -216,6 +283,7 @@ async def screen_entity(entity_name: str, country: str = "") -> str:
             "UNKNOWN": "API check failed. Perform manual checks at opensanctions.org and trade.gov before proceeding.",
         }.get(aggregate_risk, "Unable to determine risk."),
     }
+    logger.info("tool_done", extra={"tool": "screen_entity", "risk": result.get("aggregate_risk"), "elapsed_s": round(time.monotonic() - _t0, 3)})
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -224,15 +292,26 @@ async def screen_entity(entity_name: str, country: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 if ENABLE_EVAL:
+    import httpx as _httpx
+
     from .evaluator import (
-        draft_answer as _draft_answer,
-        evaluate_response as _evaluate_response,
-        extract_entities as _extract_entities,
-        question_to_query as _question_to_query,
-        refine_query as _refine_query,
         _eval_with_client,
     )
-    import httpx as _httpx
+    from .evaluator import (
+        draft_answer as _draft_answer,
+    )
+    from .evaluator import (
+        evaluate_response as _evaluate_response,
+    )
+    from .evaluator import (
+        extract_entities as _extract_entities,
+    )
+    from .evaluator import (
+        question_to_query as _question_to_query,
+    )
+    from .evaluator import (
+        refine_query as _refine_query,
+    )
 
     @mcp.tool()
     async def evaluate_response(question: str, contexts: list[str], answer: str) -> str:
@@ -290,7 +369,7 @@ if ENABLE_EVAL:
         Always show both sections — they tell the user where the information came
         from and how much to trust it.
         """
-        from .sources import arxiv, semantic_scholar, newsapi
+        from .sources import arxiv, newsapi, semantic_scholar
 
         threshold = max(0.0, min(threshold, 1.0))
         max_attempts = max(1, min(max_attempts, 5))
@@ -436,6 +515,8 @@ if ENABLE_EVAL:
             top_comp = kb_result["components"][0] if kb_result.get("components") else None
             hs_codes = top_comp.get("hs_codes", []) if top_comp else []
 
+            _coverage: dict[str, str] = {}
+
             kb_contexts: list[str] = []
             kb_sources: list[dict[str, Any]] = []
             for comp in kb_result.get("components", [])[:3]:
@@ -464,6 +545,8 @@ if ENABLE_EVAL:
                 kb_contexts.append(text)
                 kb_sources.append({"type": "knowledge_base", "title": step["name"], "url": ""})
 
+            _coverage["knowledge_base"] = f"{len(kb_contexts)} entries" if kb_contexts else "empty"
+
             # Comtrade is also stable (annual data) — fetch once if we have an HS code
             trade_context: list[str] = []
             trade_sources: list[dict[str, Any]] = []
@@ -489,6 +572,11 @@ if ENABLE_EVAL:
                 except Exception:
                     pass
 
+            if hs_codes and COMTRADE_API_KEY:
+                _coverage["comtrade"] = "ok" if trade_context else "empty"
+            else:
+                _coverage["comtrade"] = "skipped (no hs_code or api_key)"
+
             # Fetch GDELT once before the retry loop — news doesn't change
             # between attempts, and re-fetching would burn rate limit quota.
             # The semaphore in gdelt.py caps global concurrency at 2, so these
@@ -505,6 +593,9 @@ if ENABLE_EVAL:
             _gdelt_results = await asyncio.gather(_gdelt_sc(), _gdelt_gm(), return_exceptions=True)
             gdelt_sc = _gdelt_results[0] if isinstance(_gdelt_results[0], list) else []
             gdelt_gm = _gdelt_results[1] if isinstance(_gdelt_results[1], list) else []
+
+            _coverage["gdelt_supply_chain"] = f"{len(gdelt_sc)} articles" if gdelt_sc else "empty"
+            _coverage["gdelt_grey_market"] = f"{len(gdelt_gm)} articles" if gdelt_gm else "empty"
 
             gdelt_contexts: list[str] = []
             gdelt_sources: list[dict[str, Any]] = []
@@ -682,6 +773,10 @@ if ENABLE_EVAL:
                     "url": price.get("source_url", price.get("lme_url", "")),
                 })
 
+            _coverage["federal_register"] = f"{len(fedreg_context)} docs" if fedreg_context else ("error" if fedreg_raw and isinstance(fedreg_raw, list) and fedreg_raw[0].get("error") else "empty")
+            _coverage["pubchem"] = f"{len(chem_context)} chemicals" if chem_context else "empty"
+            _coverage["commodity_prices"] = f"{len(commodity_context)} metals" if commodity_context else "empty"
+
             # Cache NewsAPI results by query string — only re-fetch when query changes.
             # NewsAPI quota is limited; hitting it 3× with the same query wastes calls.
             news_cache: dict[str, list] = {}
@@ -785,6 +880,7 @@ if ENABLE_EVAL:
                         "entities_extracted": entities,
                         "attempt": attempt,
                         "threshold_met": composite >= threshold,
+                        "source_coverage": _coverage,
                     }
 
                 if composite >= threshold:
@@ -815,10 +911,24 @@ if ENABLE_EVAL:
 
 def main() -> None:
     app = mcp.streamable_http_app()
+    # Middleware applied in reverse order (last added = outermost)
     app.add_middleware(BearerAuthMiddleware)
+    app.add_middleware(RequestSizeLimitMiddleware)
+    app.add_middleware(RateLimitMiddleware)
 
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+
+    async def on_shutdown() -> None:
+        await close_client()
+
+    config = uvicorn.Config(app, host="0.0.0.0", port=PORT)
+    server = uvicorn.Server(config)
+    server.config.callback_notify = lambda: None  # silence default notify
+    # Register shutdown hook without modifying Server internals
+    import asyncio as _asyncio
+    import atexit
+    atexit.register(lambda: _asyncio.run(on_shutdown()))
+    server.run()
 
 
 if __name__ == "__main__":

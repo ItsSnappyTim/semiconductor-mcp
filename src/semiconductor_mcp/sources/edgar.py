@@ -9,10 +9,16 @@ from typing import Any
 
 import httpx
 
+from ..cache import TTLCache
+from ..http_client import request_with_retry
+from ..schemas import FilingResult
+
 _EFTS_BASE = "https://efts.sec.gov/LATEST/search-index"
-_TIMEOUT = 20
+_TIMEOUT = 20.0
 # SEC EDGAR requires a descriptive User-Agent or returns 403
 _HEADERS = {"User-Agent": "semiconductor-mcp-research/1.0 research@semiconductor-mcp.app"}
+
+_cache: TTLCache = TTLCache(ttl_seconds=3600, name="edgar")  # 1 hour
 
 
 def _filing_url(cik: str, adsh: str) -> str:
@@ -28,11 +34,16 @@ async def search_filings(
     forms: str = "10-K,10-Q",
     start_date: str = "2022-01-01",
     max_results: int = 5,
-) -> list[dict[str, Any]]:
+) -> list[FilingResult | dict[str, Any]]:
     """Search EDGAR full-text for supply chain disclosures in SEC filings.
 
     Returns up to max_results filing records matching the company + topic.
     """
+    cache_key = f"{company}:{topic}:{forms}:{start_date}:{max_results}"
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     params = {
         "q": f'"{company}" "{topic}"',
         "forms": forms,
@@ -40,9 +51,13 @@ async def search_filings(
         "startdt": start_date,
     }
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(_EFTS_BASE, params=params, headers=_HEADERS)
-            resp.raise_for_status()
+        resp = await request_with_retry(
+            _EFTS_BASE,
+            params=params,
+            headers=_HEADERS,
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
         data = resp.json()
     except httpx.TimeoutException:
         return [{"error": "SEC EDGAR API timeout"}]
@@ -52,21 +67,23 @@ async def search_filings(
         return [{"error": str(exc)}]
 
     hits = data.get("hits", {}).get("hits", [])
-    results = []
+    results: list[FilingResult] = []
     for hit in hits[:max_results]:
         src = hit.get("_source", {})
         display_names = src.get("display_names", [])
         company_name = display_names[0] if display_names else company
         ciks = src.get("ciks", [""])
         adsh = src.get("adsh", "")
-        results.append({
-            "company_name": company_name,
-            "form_type": src.get("form", src.get("file_type", "")),
-            "filed_at": src.get("file_date", ""),
-            "period": src.get("period_ending", ""),
-            "file_url": _filing_url(ciks[0], adsh) if ciks and adsh else "",
-            "excerpt": "",  # EFTS index endpoint does not return text excerpts
-        })
+        results.append(
+            FilingResult(
+                company_name=company_name,
+                form_type=src.get("form", src.get("file_type", "")),
+                filed_at=src.get("file_date", ""),
+                period=src.get("period_ending", ""),
+                file_url=_filing_url(ciks[0], adsh) if ciks and adsh else "",
+                excerpt="",  # EFTS index endpoint does not return text excerpts
+            )
+        )
 
     if not results:
         search_url = (
@@ -74,11 +91,14 @@ async def search_filings(
             f"q=%22{company.replace(' ', '+')}%22+%22{topic.replace(' ', '+')}%22"
             f"&forms={forms}&dateRange=custom&startdt={start_date}"
         )
-        return [{
+        no_match: list[FilingResult | dict[str, Any]] = [{
             "company": company,
             "topic": topic,
             "result": "No matches found",
             "search_url": search_url,
         }]
+        _cache.set(cache_key, no_match)
+        return no_match
 
+    _cache.set(cache_key, results)
     return results

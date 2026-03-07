@@ -1,6 +1,5 @@
 import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 
 from .config import DB_PATH
@@ -54,7 +53,7 @@ def init_db() -> None:
 def insert_whitepaper(
     filename: str, title: str, page_count: int, file_path: str, full_text: str
 ) -> int:
-    added_at = datetime.now(timezone.utc).isoformat()
+    added_at = datetime.now(UTC).isoformat()
     with get_connection() as conn:
         cur = conn.execute(
             """

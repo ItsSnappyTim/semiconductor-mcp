@@ -15,16 +15,21 @@ from typing import Any
 
 import httpx
 
-_BASE = "https://api.gdeltproject.org/api/v2/doc/doc"
-_TIMEOUT = 15
-_RETRY_DELAYS = [3.0, 6.0]  # seconds to wait after 429 before retrying
-_HEADERS = {"User-Agent": "semiconductor-mcp-research/1.0"}
+from ..cache import TTLCache
+from ..http_client import request_with_retry
+from ..schemas import GdeltArticle
 
-# Allow at most 2 concurrent GDELT requests per process — enough to parallelise
-# the two calls inside research_and_verify_supply_chain while still preventing
-# a pile-up if multiple tool calls arrive simultaneously.
+_BASE = "https://api.gdeltproject.org/api/v2/doc/doc"
+_TIMEOUT = 15.0
+_RETRY_DELAYS = [3.0, 6.0]
+
+# Allow at most 2 concurrent GDELT requests per process.
 # Lazily initialised so it is created inside the running event loop.
 _sem: asyncio.Semaphore | None = None
+
+# GDELT news is relatively fresh — 30 min cache is a good balance between
+# freshness and avoiding hammering the rate limit.
+_cache: TTLCache = TTLCache(ttl_seconds=1800, name="gdelt")
 
 
 def _get_sem() -> asyncio.Semaphore:
@@ -34,7 +39,12 @@ def _get_sem() -> asyncio.Semaphore:
     return _sem
 
 
-async def _search(query: str, days: int, max_records: int = 10) -> list[dict[str, Any]]:
+async def _search(query: str, days: int, max_records: int = 10) -> list[GdeltArticle | dict[str, Any]]:
+    cache_key = f"{query}:{days}:{max_records}"
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     params = {
         "query": query,
         "mode": "ArtList",
@@ -43,22 +53,18 @@ async def _search(query: str, days: int, max_records: int = 10) -> list[dict[str
         "timespan": f"{max(1, min(days, 365))}d",
         "sort": "DateDesc",
     }
-    last_error: str = ""
     async with _get_sem():
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                for delay in [0] + _RETRY_DELAYS:
-                    if delay:
-                        await asyncio.sleep(delay)
-                    resp = await client.get(_BASE, params=params, headers=_HEADERS)
-                    if resp.status_code == 429:
-                        last_error = "GDELT rate limit (429)"
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    break
-                else:
-                    return [{"error": last_error}]
+            resp = await request_with_retry(
+                _BASE,
+                params=params,
+                timeout=_TIMEOUT,
+                retry_delays=_RETRY_DELAYS,
+            )
+            if resp.status_code == 429:
+                return [{"error": "GDELT rate limit (429)"}]
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.TimeoutException:
             return [{"error": "GDELT API timeout"}]
         except httpx.HTTPStatusError as exc:
@@ -67,25 +73,26 @@ async def _search(query: str, days: int, max_records: int = 10) -> list[dict[str
             return [{"error": str(exc)}]
 
     articles = data.get("articles", []) if data else []
-    return [
-        {
-            "title": a.get("title", ""),
-            "url": a.get("url", ""),
-            "domain": a.get("domain", ""),
-            "date": a.get("seendate", ""),
-            "language": a.get("language", ""),
-        }
+    results: list[GdeltArticle] = [
+        GdeltArticle(
+            title=a.get("title", ""),
+            url=a.get("url", ""),
+            domain=a.get("domain", ""),
+            date=a.get("seendate", ""),
+        )
         for a in articles
     ]
+    _cache.set(cache_key, results)
+    return results
 
 
-async def search_supply_chain_news(query: str, days: int = 90) -> list[dict[str, Any]]:
+async def search_supply_chain_news(query: str, days: int = 90) -> list[GdeltArticle | dict[str, Any]]:
     """Search GDELT for recent supply chain news related to a query."""
     full_query = f'"{query}" semiconductor supply chain'
     return await _search(full_query, days)
 
 
-async def search_grey_market_signals(query: str, days: int = 180) -> list[dict[str, Any]]:
+async def search_grey_market_signals(query: str, days: int = 180) -> list[GdeltArticle | dict[str, Any]]:
     """Search GDELT for grey market, smuggling, and enforcement signals."""
     grey_terms = (
         "(smuggling OR \"sanctions evasion\" OR counterfeit OR "
